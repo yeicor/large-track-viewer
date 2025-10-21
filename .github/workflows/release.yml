@@ -190,7 +190,7 @@ jobs:
 
       - run: cargo install --locked trunk@0.21.14
 
-      - run: trunk build --no-default-features --features web --locked --release
+      - run: trunk build src/entrypoints/index.html --locked --release
 
       - run: |
           cd dist
@@ -236,10 +236,9 @@ jobs:
             "ndk;27.2.12479018" \
             "build-tools;35.0.0"
 
-      - run: cargo install --locked xbuild --git https://github.com/rust-mobile/xbuild.git --branch master
+      - run: cargo install --locked xbuild --git https://github.com/rust-mobile/xbuild.git --tag v0.2.1-alpha
 
-      - run: |
-          /home/yeicor/.cargo/bin/x build --features android --platform android --arch arm64 --format apk --release
+      - run: x build --features android --platform android --arch arm64 --format apk --release
 
       - run: |
           find target -name "*.apk" -type f -exec cp {} large-track-viewer.apk \;

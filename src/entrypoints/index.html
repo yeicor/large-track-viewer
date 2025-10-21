@@ -4,7 +4,16 @@
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
         <title>Large Track Viewer</title>
-        <link data-trunk rel="rust" data-target-name="large-track-viewer" data-wasm-opt="z" data-wasm-opt-params="--all-features" />
+        <link
+            data-trunk
+            rel="rust"
+            href="../.."
+            data-target-name="large-track-viewer"
+            data-cargo-no-default-features
+            data-cargo-features="web"
+            data-wasm-opt="z"
+            data-wasm-opt-params="--all-features"
+        />
         <style>
             html {
                 /* Remove touch delay: */
