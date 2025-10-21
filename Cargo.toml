@@ -1,6 +1,6 @@
 [package]
 name = "large-track-viewer"
-version = "0.1.0"
+version = "0.1.4"
 authors = ["Yeicor"]
 description = "Large Track Viewer - A cross-platform application for viewing and analyzing large GPS tracks"
 repository = "https://github.com/Yeicor/large-track-viewer"
