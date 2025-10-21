@@ -52,7 +52,7 @@ jobs:
           git add Cargo.toml Cargo.lock
           git commit -m "Sync version to ${{ steps.get_version.outputs.version }}"
           git tag -f ${{ steps.get_version.outputs.tag }}
-          git push
+          git push origin HEAD --tags --force
 
           echo "Version has been updated and tag moved. This workflow run will stop."
           echo "The moved tag will trigger a new workflow run with the updated version."
