@@ -1,0 +1,84 @@
+[package]
+name = "large-track-viewer"
+version = "0.1.0"
+authors = ["Yeicor"]
+description = "Large Track Viewer - A cross-platform application for viewing and analyzing large GPS tracks"
+repository = "https://github.com/Yeicor/large-track-viewer"
+license = "MIT OR Apache-2.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib", "rlib"] # Required for Android.
+
+[features]
+default = ["native"]
+native = ["tokio/rt-multi-thread"]
+web = ["tokio/rt"]
+android = ["eframe/android-game-activity"] # (android is native)
+
+[dependencies]
+# === UI Framework ===
+eframe = { version = "0.33", features = ["persistence"] }
+egui = "0.33"
+
+# === Async Runtime ===
+tokio = { version = "1.48", default-features = false, features = ["macros", "sync"] }
+
+# === CLI ===
+clap = { version = "4.5", features = ["derive"] }
+
+# === Logging ===
+tracing = "0.1"
+
+# === Misc ===
+instant = { version = "0.1", features = ["wasm-bindgen"] }
+shadow-rs = { version = "1.4", default-features = false }
+
+# === Native (desktop & mobile) ===
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tracing-subscriber = "0.3"
+
+# === Web ===
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = "0.3"
+tracing-wasm = "0.2"
+console_error_panic_hook = "0.1"
+
+# === Build ===
+[build-dependencies]
+shadow-rs = { version = "1.4", features = ["git2"] }
+
+# === Android ===
+[target.'cfg(target_os = "android")'.dependencies]
+winit = { version = "0.30" } # Same as eframe
+log = "0.4"
+android_logger = "0.15"
+
+[package.metadata.android]
+package = "com.github.yeicor.largetrackviewer"
+
+[package.metadata.android.application]
+label = "Large Track Viewer"
+
+[package.metadata.android.sdk]
+min_sdk_version = 23
+target_sdk_version = 35
+max_sdk_version = 35
+
+# [[package.metadata.android.uses_permission]]
+# name = "android.permission.INTERNET"
+
+# === Release Configuration ===
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+
+[profile.dev]
+opt-level = 1
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false

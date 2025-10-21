@@ -1,0 +1,256 @@
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync-version:
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    outputs:
+      needs_update: ${{ steps.check_version.outputs.needs_update }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract version from tag
+        id: get_version
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          VERSION=${TAG#v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Check if version needs update
+        id: check_version
+        run: |
+          CURRENT_VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          echo "Current version in Cargo.toml: $CURRENT_VERSION"
+          echo "Tag version: ${{ steps.get_version.outputs.version }}"
+          if [ "$CURRENT_VERSION" != "${{ steps.get_version.outputs.version }}" ]; then
+            echo "needs_update=true" >> $GITHUB_OUTPUT
+            echo "Version needs update"
+          else
+            echo "needs_update=false" >> $GITHUB_OUTPUT
+            echo "Version already matches tag"
+          fi
+
+      - name: Update Cargo.toml version
+        if: steps.check_version.outputs.needs_update == 'true'
+        run: |
+          sed -i 's/^version = ".*"/version = "${{ steps.get_version.outputs.version }}"/' Cargo.toml
+
+      - name: Create Pull Request
+        if: steps.check_version.outputs.needs_update == 'true'
+        id: cpr
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore: bump version to ${{ steps.get_version.outputs.version }}"
+          title: "chore: bump version to ${{ steps.get_version.outputs.version }}"
+          body: |
+            Automated version bump for release ${{ steps.get_version.outputs.tag }}
+
+            This PR updates Cargo.toml to match the tagged version.
+          branch: version-bump-${{ steps.get_version.outputs.version }}
+          base: main
+          delete-branch: true
+
+      - name: Auto-merge PR
+        if: steps.check_version.outputs.needs_update == 'true' && steps.cpr.outputs.pull-request-number
+        run: |
+          gh pr merge ${{ steps.cpr.outputs.pull-request-number }} --auto --squash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Wait for PR merge
+        if: steps.check_version.outputs.needs_update == 'true' && steps.cpr.outputs.pull-request-number
+        run: |
+          echo "Waiting for PR to be merged..."
+          for i in {1..30}; do
+            STATUS=$(gh pr view ${{ steps.cpr.outputs.pull-request-number }} --json state --jq .state)
+            if [ "$STATUS" = "MERGED" ]; then
+              echo "PR merged successfully"
+              break
+            fi
+            echo "Attempt $i/30: PR status is $STATUS, waiting..."
+            sleep 10
+          done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update tag to point to merged commit
+        if: steps.check_version.outputs.needs_update == 'true' && steps.cpr.outputs.pull-request-number
+        run: |
+          git fetch origin main
+          git tag -f ${{ steps.get_version.outputs.tag }} origin/main
+          git push -f origin ${{ steps.get_version.outputs.tag }}
+
+      - name: Stop workflow - tag updated, rebuild will be triggered
+        if: steps.check_version.outputs.needs_update == 'true'
+        run: |
+          echo "Version has been updated and tag moved. This workflow run will stop."
+          echo "The moved tag will trigger a new workflow run with the updated version."
+          exit 0
+
+  build-desktop:
+    needs: [sync-version]
+    if: ${{ always() && (needs.sync-version.result == 'skipped' || needs.sync-version.outputs.needs_update == 'false') }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            pre: |
+              sudo apt-get update
+              sudo apt-get install -y \
+                libx11-dev \
+                libxi-dev \
+                libgl1-mesa-dev \
+                libasound2-dev \
+                libxcb-render0-dev \
+                libxcb-shape0-dev \
+                libxcb-xfixes0-dev \
+                libxkbcommon-dev \
+                libssl-dev \
+                libgtk-3-dev
+
+          - os: windows-2025
+            target: x86_64-pc-windows-msvc
+            ext: ".exe"
+
+          - os: macos-15
+            target: x86_64-apple-darwin
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.90.0
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - if: matrix.pre != ''
+        run: ${{ matrix.pre }}
+
+      - run: cargo build --locked --release --target ${{ matrix.target }}
+
+      - shell: bash
+        run: |
+          cd target/${{ matrix.target }}/release
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            ARTIFACT_NAME="large-track-viewer-${{ matrix.target }}${{ matrix.ext }}"
+            cp "large-track-viewer${{ matrix.ext }}" "../../../$ARTIFACT_NAME"
+          else
+            ARTIFACT_NAME="large-track-viewer-${{ matrix.target }}"
+            cp "large-track-viewer${{ matrix.ext }}" "../../../$ARTIFACT_NAME"
+          fi
+          cd ../../..
+          echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> $GITHUB_ENV
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: ${{ env.ARTIFACT_NAME }}
+
+      - if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          files: ${{ env.ARTIFACT_NAME }}
+
+  build-web:
+    needs: [sync-version]
+    if: ${{ always() && (needs.sync-version.result == 'skipped' || needs.sync-version.outputs.needs_update == 'false') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.90.0
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: web-${{ hashFiles('**/Cargo.lock') }}
+
+      - run: cargo install --locked trunk@0.21.14
+
+      - run: trunk build --no-default-features --features web --locked --release
+
+      - run: |
+          cd dist
+          tar -czf ../large-track-viewer-web.tar.gz *
+          cd ..
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: large-track-viewer-web
+          path: dist
+
+      - if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          files: large-track-viewer-web.tar.gz
+
+      - if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/deploy-pages@v4
+        with:
+          artifact: dist
+
+  build-android:
+    needs: [sync-version]
+    if: ${{ always() && (needs.sync-version.result == 'skipped' || needs.sync-version.outputs.needs_update == 'false') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.90.0
+        with:
+          targets: aarch64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android-${{ hashFiles('**/Cargo.lock') }}
+
+      - uses: android-actions/setup-android@v3
+
+      - run: |
+          ${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager \
+            "platforms;android-35" \
+            "ndk;27.2.12479018" \
+            "build-tools;35.0.0"
+
+      - run: cargo install --locked xbuild --git https://github.com/rust-mobile/xbuild.git --branch master
+
+      - run: |
+          /home/yeicor/.cargo/bin/x build --features android --platform android --arch arm64 --format apk --release
+
+      - run: |
+          find target -name "*.apk" -type f -exec cp {} large-track-viewer.apk \;
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: large-track-viewer-android
+          path: large-track-viewer.apk
+
+      - if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          files: large-track-viewer.apk
