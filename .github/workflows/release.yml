@@ -42,10 +42,14 @@ jobs:
         run: |
           sed -i 's/^version = ".*"/version = "${{ steps.get_version.outputs.version }}"/' Cargo.toml
           cargo generate-lockfile
-          git push -v origin master
 
-          git tag -f ${{ steps.get_version.outputs.tag }} origin/master
-          git push -f origin ${{ steps.get_version.outputs.tag }}
+          # Now push the changes and force update the tag to point to this new commit
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml Cargo.lock
+          git commit -m "Sync version to ${{ steps.get_version.outputs.version }}"
+          git tag -f ${{ steps.get_version.outputs.tag }}
+          git push origin HEAD --tags --force
 
           echo "Version has been updated and tag moved. This workflow run will stop."
           echo "The moved tag will trigger a new workflow run with the updated version."
