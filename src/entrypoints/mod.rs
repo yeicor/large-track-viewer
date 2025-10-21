@@ -1,5 +1,5 @@
 // Shared modules
-mod cli;
+pub(crate) mod cli;
 mod metadata;
 mod run;
 

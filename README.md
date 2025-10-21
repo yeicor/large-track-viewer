@@ -4,7 +4,7 @@ A cross-platform application for viewing and analyzing large GPS tracks.
 
 ## Features
 
-- Cross-platform: desktop (Linux, Windows, MacOS), web (Firefox, Chrome, Edge, etc.) and mobile (Android, iOS).
+- Cross-platform: desktop (Linux, Windows, MacOS), web and mobile (Android, iOS).
 
 ## Building
 
