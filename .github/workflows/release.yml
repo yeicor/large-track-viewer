@@ -41,6 +41,7 @@ jobs:
       - if: steps.check_version.outputs.needs_update == 'true'
         run: |
           sed -i 's/^version = ".*"/version = "${{ steps.get_version.outputs.version }}"/' Cargo.toml
+          cargo generate-lockfile
 
       - if: steps.check_version.outputs.needs_update == 'true'
         id: cpr
@@ -66,14 +67,14 @@ jobs:
       - if: steps.check_version.outputs.needs_update == 'true' && steps.cpr.outputs.pull-request-number
         run: |
           echo "Waiting for PR to be merged..."
-          for i in {1..30}; do
+          for i in {1..100}; do
             STATUS=$(gh pr view ${{ steps.cpr.outputs.pull-request-number }} --json state --jq .state)
             if [ "$STATUS" = "MERGED" ]; then
               echo "PR merged successfully"
               break
             fi
-            echo "Attempt $i/30: PR status is $STATUS, waiting..."
-            sleep 10
+            echo "Attempt $i/100: PR status is $STATUS, waiting..."
+            sleep 30
           done
         env:
           GH_TOKEN: ${{ secrets.CONTENTS_GITHUB_TOKEN }}

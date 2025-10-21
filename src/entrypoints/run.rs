@@ -1,12 +1,12 @@
 use super::metadata::log_version_info;
-use crate::{app::cli::Cli, entrypoints::cli::parse_args};
+use crate::{app::cli::Settings, entrypoints::cli::parse_args};
 
 /// Setup and create the app
 #[allow(dead_code)]
 pub async fn setup_app()
 -> Option<Box<dyn FnOnce(&eframe::CreationContext<'_>) -> Box<dyn eframe::App>>> {
     log_version_info();
-    let cli_args = match parse_args::<Cli>() {
+    let cli_args = match parse_args::<Settings>() {
         Ok(args) => args,
         Err(e) => {
             #[cfg(not(target_arch = "wasm32"))]
@@ -25,7 +25,7 @@ Starting anyway without args.",
                     tracing::error!(user_msg);
                 }
                 use clap::Parser;
-                Cli::parse_from(Vec::<String>::new()) // Default args on web if parsing fails
+                Settings::parse_from(Vec::<String>::new()) // Default args on web if parsing fails
             }
         }
     };

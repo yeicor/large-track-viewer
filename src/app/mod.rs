@@ -1,13 +1,13 @@
-pub(crate) mod cli;
+pub(crate) mod settings;
 
 use eframe::egui;
 
 pub struct LargeTrackViewerApp {
-    cli_args: cli::Cli,
+    cli_args: settings::Settings,
 }
 
 impl LargeTrackViewerApp {
-    pub fn new(cli_args: cli::Cli, _cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(cli_args: settings::Settings, _cc: &eframe::CreationContext<'_>) -> Self {
         // Customize egui here with cc.egui_ctx.set_fonts and cc.egui_ctx.set_visuals.
         // Restore app state using cc.storage (requires the "persistence" feature).
         Self { cli_args }
