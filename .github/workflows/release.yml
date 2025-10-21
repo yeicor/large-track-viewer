@@ -22,16 +22,14 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract version from tag
-        id: get_version
+      - id: get_version
         run: |
           TAG=${GITHUB_REF#refs/tags/}
           VERSION=${TAG#v}
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "tag=$TAG" >> $GITHUB_OUTPUT
 
-      - name: Check if version needs update
-        id: check_version
+      - id: check_version
         run: |
           CURRENT_VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
           echo "Current version in Cargo.toml: $CURRENT_VERSION"
@@ -44,13 +42,11 @@ jobs:
             echo "Version already matches tag"
           fi
 
-      - name: Update Cargo.toml version
-        if: steps.check_version.outputs.needs_update == 'true'
+      - if: steps.check_version.outputs.needs_update == 'true'
         run: |
           sed -i 's/^version = ".*"/version = "${{ steps.get_version.outputs.version }}"/' Cargo.toml
 
-      - name: Create Pull Request
-        if: steps.check_version.outputs.needs_update == 'true'
+      - if: steps.check_version.outputs.needs_update == 'true'
         id: cpr
         uses: peter-evans/create-pull-request@v7
         with:
@@ -62,18 +58,16 @@ jobs:
 
             This PR updates Cargo.toml to match the tagged version.
           branch: version-bump-${{ steps.get_version.outputs.version }}
-          base: main
+          base: master
           delete-branch: true
 
-      - name: Auto-merge PR
-        if: steps.check_version.outputs.needs_update == 'true' && steps.cpr.outputs.pull-request-number
+      - if: steps.check_version.outputs.needs_update == 'true' && steps.cpr.outputs.pull-request-number
         run: |
           gh pr merge ${{ steps.cpr.outputs.pull-request-number }} --auto --squash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Wait for PR merge
-        if: steps.check_version.outputs.needs_update == 'true' && steps.cpr.outputs.pull-request-number
+      - if: steps.check_version.outputs.needs_update == 'true' && steps.cpr.outputs.pull-request-number
         run: |
           echo "Waiting for PR to be merged..."
           for i in {1..30}; do
@@ -88,15 +82,13 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Update tag to point to merged commit
-        if: steps.check_version.outputs.needs_update == 'true' && steps.cpr.outputs.pull-request-number
+      - if: steps.check_version.outputs.needs_update == 'true' && steps.cpr.outputs.pull-request-number
         run: |
-          git fetch origin main
-          git tag -f ${{ steps.get_version.outputs.tag }} origin/main
+          git fetch origin master
+          git tag -f ${{ steps.get_version.outputs.tag }} origin/master
           git push -f origin ${{ steps.get_version.outputs.tag }}
 
-      - name: Stop workflow - tag updated, rebuild will be triggered
-        if: steps.check_version.outputs.needs_update == 'true'
+      - if: steps.check_version.outputs.needs_update == 'true'
         run: |
           echo "Version has been updated and tag moved. This workflow run will stop."
           echo "The moved tag will trigger a new workflow run with the updated version."
