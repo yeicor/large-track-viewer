@@ -42,51 +42,11 @@ jobs:
         run: |
           sed -i 's/^version = ".*"/version = "${{ steps.get_version.outputs.version }}"/' Cargo.toml
           cargo generate-lockfile
+          git push -v origin master
 
-      - if: steps.check_version.outputs.needs_update == 'true'
-        id: cpr
-        uses: peter-evans/create-pull-request@v7
-        with:
-          token: ${{ secrets.CONTENTS_GITHUB_TOKEN }}
-          commit-message: "chore: bump version to ${{ steps.get_version.outputs.version }}"
-          title: "chore: bump version to ${{ steps.get_version.outputs.version }}"
-          body: |
-            Automated version bump for release ${{ steps.get_version.outputs.tag }}
-
-            This PR updates Cargo.toml to match the tagged version.
-          branch: version-bump-${{ steps.get_version.outputs.version }}
-          base: master
-          delete-branch: true
-
-      - if: steps.check_version.outputs.needs_update == 'true' && steps.cpr.outputs.pull-request-number
-        run: |
-          gh pr merge ${{ steps.cpr.outputs.pull-request-number }} --auto --squash
-        env:
-          GH_TOKEN: ${{ secrets.CONTENTS_GITHUB_TOKEN }}
-
-      - if: steps.check_version.outputs.needs_update == 'true' && steps.cpr.outputs.pull-request-number
-        run: |
-          echo "Waiting for PR to be merged..."
-          for i in {1..100}; do
-            STATUS=$(gh pr view ${{ steps.cpr.outputs.pull-request-number }} --json state --jq .state)
-            if [ "$STATUS" = "MERGED" ]; then
-              echo "PR merged successfully"
-              break
-            fi
-            echo "Attempt $i/100: PR status is $STATUS, waiting..."
-            sleep 30
-          done
-        env:
-          GH_TOKEN: ${{ secrets.CONTENTS_GITHUB_TOKEN }}
-
-      - if: steps.check_version.outputs.needs_update == 'true' && steps.cpr.outputs.pull-request-number
-        run: |
-          git fetch origin master
           git tag -f ${{ steps.get_version.outputs.tag }} origin/master
           git push -f origin ${{ steps.get_version.outputs.tag }}
 
-      - if: steps.check_version.outputs.needs_update == 'true'
-        run: |
           echo "Version has been updated and tag moved. This workflow run will stop."
           echo "The moved tag will trigger a new workflow run with the updated version."
           exit 0
