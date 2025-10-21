@@ -8,4 +8,4 @@ A cross-platform application for viewing and analyzing large GPS tracks.
 
 ## Building
 
-See the [release workflow](.github/workflows/release.yml) for build instructions, or simply use the prebuilt artifacts.
+See the [release workflow](.github/workflows/release.yml) for build instructions, or simply use the prebuilt [release](https://github.com/yeicor/large-track-viewer/releases)/[workflow](https://github.com/yeicor/large-track-viewer/actions) artifacts.
