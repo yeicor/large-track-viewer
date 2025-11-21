@@ -19,10 +19,10 @@ pub async fn native_main() {
         // Safety: single-threaded at startup
         unsafe {
             // Nicer default logs
-            std::env::set_var("RUST_LOG", "info,wgpu_hal=warn");
+            std::env::set_var("RUST_LOG", "info,wgpu_hal=warn,eframe=warn");
         }
     }
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::fmt::init(); // Transform logs into tracing events
 
     if let Some(app_creator) = setup_app().await {
         let native_options = eframe::NativeOptions {

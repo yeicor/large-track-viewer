@@ -1,5 +1,6 @@
 mod app;
-mod entrypoints;
+pub mod data;
+pub mod entrypoints;
 
 // Entry point for Android
 #[cfg(target_os = "android")]

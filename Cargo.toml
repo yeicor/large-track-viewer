@@ -41,9 +41,22 @@ puffin_http = { version = "0.16", optional = true }
 instant = { version = "0.1", features = ["wasm-bindgen"] }
 shadow-rs = { version = "1.4", default-features = false }
 
+# === GPX and Geo ===
+gpx = "0.10"
+geo = "0.31"
+walkers = "0.50"
+
+# === Data structures ===
+rayon = "1.10"
+lru = "0.16"
+
+# === Error Handling ===
+thiserror = "2.0"
+
 # === Native (desktop & mobile) ===
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tracing-subscriber = "0.3"
+rfd = "0.15"
 
 # === Web ===
 [target.'cfg(target_arch = "wasm32")'.dependencies]
