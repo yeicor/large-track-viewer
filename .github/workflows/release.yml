@@ -40,8 +40,15 @@ jobs:
 
       - if: steps.check_version.outputs.needs_update == 'true'
         run: |
-          # Avoid detached HEAD state issues due to using a tag, switch to the branch
-          git checkout master
+          # Avoid detached HEAD state issues: check out the default branch and ensure the tag is on the latest commit
+          DEFAULT_BRANCH=$(git remote show origin | grep 'HEAD branch' | cut -d' ' -f5)
+          CUR_COMMIT=$(git rev-parse HEAD)
+          git checkout $DEFAULT_BRANCH
+          LAST_COMMIT=$(git rev-parse HEAD)
+          if [ "$CUR_COMMIT" != "$LAST_COMMIT" ]; then
+            echo "Error: The tag is not on the latest commit of the default branch ($DEFAULT_BRANCH). Aborting."
+            exit 1
+          fi
 
           sed -i 's/^version = ".*"/version = "${{ steps.get_version.outputs.version }}"/' Cargo.toml
           cargo generate-lockfile

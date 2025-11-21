@@ -11,15 +11,18 @@ edition = "2024"
 crate-type = ["cdylib", "rlib"] # Required for Android.
 
 [features]
-default = ["native"]
-native = ["tokio/rt-multi-thread"]
+default = ["native", "profiling"]
+native = ["tokio/rt-multi-thread", "wgpu/vulkan"]
 web = ["tokio/rt"]
 android = ["eframe/android-game-activity"] # (android is native)
+profiling = ["profiling/profile-with-tracing", "puffin", "puffin_http"]
 
 [dependencies]
 # === UI Framework ===
-eframe = { version = "0.33", features = ["persistence"] }
+eframe = { version = "0.33", default-features = false, features = ["accesskit", "default_fonts", "persistence", "wayland", "web_screen_reader", "wgpu", "x11"] }
 egui = "0.33"
+winit = { version = "0.30" } # Same as eframe
+wgpu = { version = "27", features = ["webgpu", "webgl"] } # Same as eframe
 
 # === Async Runtime ===
 tokio = { version = "1.48", default-features = false, features = ["macros", "sync"] }
@@ -27,8 +30,12 @@ tokio = { version = "1.48", default-features = false, features = ["macros", "syn
 # === CLI ===
 clap = { version = "4.5", features = ["derive"] }
 
-# === Logging ===
+# === Logging & profiling ===
 tracing = "0.1"
+profiling = "1.0" # Only a small shim to integrate different profilers (does nothing unless a specific profiler is enabled)
+# TODO: Replace puffin with tracing-web and tracing-tracy
+puffin = { version = "0.19", optional = true }
+puffin_http = { version = "0.16", optional = true }
 
 # === Misc ===
 instant = { version = "0.1", features = ["wasm-bindgen"] }
@@ -52,7 +59,6 @@ shadow-rs = { version = "1.4", features = ["git2"] }
 
 # === Android ===
 [target.'cfg(target_os = "android")'.dependencies]
-winit = { version = "0.30" } # Same as eframe
 log = "0.4"
 android_logger = "0.15"
 

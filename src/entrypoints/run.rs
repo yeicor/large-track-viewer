@@ -15,6 +15,13 @@ pub async fn setup_app()
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn native_main() {
     // Setup logging
+    if std::env::var("RUST_LOG").is_err() {
+        // Safety: single-threaded at startup
+        unsafe {
+            // Nicer default logs
+            std::env::set_var("RUST_LOG", "info,wgpu_hal=warn");
+        }
+    }
     tracing_subscriber::fmt::init();
 
     if let Some(app_creator) = setup_app().await {
