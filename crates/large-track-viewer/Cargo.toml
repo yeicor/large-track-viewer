@@ -1,0 +1,68 @@
+[package]
+name = "large-track-viewer"
+version = "0.1.10"
+authors.workspace = true
+description = "Large Track Viewer - A cross-platform application for viewing and analyzing large GPS tracks"
+repository.workspace = true
+license.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["native", "profiling"]
+native = ["egui-eframe-entrypoints/native"]
+web = ["egui-eframe-entrypoints/web"]
+android = ["egui-eframe-entrypoints/android"]
+profiling = ["egui-eframe-entrypoints/profiling"]
+
+[dependencies]
+# === Local crates ===
+large-track-lib = { path = "../large-track-lib" }
+egui-eframe-entrypoints = { path = "../egui-eframe-entrypoints" }
+
+# === UI Framework ===
+eframe.workspace = true
+egui.workspace = true
+winit.workspace = true
+
+# === Async Runtime ===
+tokio.workspace = true
+
+# === CLI ===
+clap.workspace = true
+
+# === Logging & profiling ===
+tracing.workspace = true
+profiling.workspace = true
+
+# === Geo ===
+geo.workspace = true
+walkers = "0.50"
+gpx.workspace = true
+
+# === Misc ===
+instant = { version = "0.1", features = ["wasm-bindgen"] }
+
+# === Native (desktop & mobile) ===
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rfd = "0.15"
+
+# === Web ===
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen-futures = "0.4"
+web-sys.workspace = true
+tracing-wasm = "0.2"
+console_error_panic_hook = "0.1"
+
+[package.metadata.android]
+package = "com.github.yeicor.largetrackviewer"
+
+[package.metadata.android.application]
+label = "Large Track Viewer"
+
+[package.metadata.android.sdk]
+min_sdk_version = 23
+target_sdk_version = 35
+max_sdk_version = 35

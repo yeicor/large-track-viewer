@@ -1,28 +1,22 @@
-[package]
-name = "large-track-viewer"
-version = "0.1.10"
+[workspace]
+resolver = "2"
+members = [
+    "crates/large-track-viewer",
+    "crates/large-track-lib",
+    "crates/egui-eframe-entrypoints",
+]
+
+[workspace.package]
 authors = ["Yeicor"]
-description = "Large Track Viewer - A cross-platform application for viewing and analyzing large GPS tracks"
-repository = "https://github.com/Yeicor/large-track-viewer"
-license = "MIT OR Apache-2.0"
 edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Yeicor/large-track-viewer"
 
-[lib]
-crate-type = ["cdylib", "rlib"] # Required for Android.
-
-[features]
-default = ["native", "profiling"]
-native = ["tokio/rt-multi-thread", "wgpu/vulkan"]
-web = ["tokio/rt"]
-android = ["eframe/android-game-activity"] # (android is native)
-profiling = ["profiling/profile-with-tracing", "puffin", "puffin_http"]
-
-[dependencies]
+[workspace.dependencies]
 # === UI Framework ===
 eframe = { version = "0.33", default-features = false, features = ["accesskit", "default_fonts", "persistence", "wayland", "web_screen_reader", "wgpu", "x11"] }
-egui = "0.33"
-winit = { version = "0.30" } # Same as eframe
-wgpu = { version = "27", features = ["webgpu", "webgl"] } # Same as eframe
+egui = "*" # Use the same version as eframe
+winit = "*" # Use the same version as eframe
 
 # === Async Runtime ===
 tokio = { version = "1.48", default-features = false, features = ["macros", "sync"] }
@@ -32,64 +26,17 @@ clap = { version = "4.5", features = ["derive"] }
 
 # === Logging & profiling ===
 tracing = "0.1"
-profiling = "1.0" # Only a small shim to integrate different profilers (does nothing unless a specific profiler is enabled)
-# TODO: Replace puffin with tracing-web and tracing-tracy
-puffin = { version = "0.19", optional = true }
-puffin_http = { version = "0.16", optional = true }
-
-# === Misc ===
-instant = { version = "0.1", features = ["wasm-bindgen"] }
-shadow-rs = { version = "1.4", default-features = false }
+profiling = "1.0"
 
 # === GPX and Geo ===
 gpx = "0.10"
 geo = "0.31"
-walkers = "0.50"
-
-# === Data structures ===
-rayon = "1.10"
-lru = "0.16"
-
-# === Error Handling ===
-thiserror = "2.0"
-
-# === Native (desktop & mobile) ===
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-tracing-subscriber = "0.3"
-rfd = "0.15"
 
 # === Web ===
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen = "0.2"
-wasm-bindgen-futures = "0.4"
 web-sys = "0.3"
-tracing-wasm = "0.2"
-console_error_panic_hook = "0.1"
 
-# === Build ===
-[build-dependencies]
-shadow-rs = { version = "1.4", features = ["git2"] }
 
-# === Android ===
-[target.'cfg(target_os = "android")'.dependencies]
-log = "0.4"
-android_logger = "0.15"
 
-[package.metadata.android]
-package = "com.github.yeicor.largetrackviewer"
-
-[package.metadata.android.application]
-label = "Large Track Viewer"
-
-[package.metadata.android.sdk]
-min_sdk_version = 23
-target_sdk_version = 35
-max_sdk_version = 35
-
-# [[package.metadata.android.uses_permission]]
-# name = "android.permission.INTERNET"
-
-# === Release Configuration ===
 [profile.release]
 opt-level = 3
 lto = true
@@ -98,6 +45,3 @@ strip = true
 
 [profile.dev]
 opt-level = 1
-
-[package.metadata.wasm-pack.profile.release]
-wasm-opt = false

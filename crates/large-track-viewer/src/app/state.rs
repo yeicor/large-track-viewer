@@ -4,8 +4,8 @@
 //! UI settings, and file loading operations.
 
 use crate::app::settings::Settings;
-use crate::data::{Config, RouteCollection};
 use egui::Color32;
+use large_track_lib::{Config, RouteCollection};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 

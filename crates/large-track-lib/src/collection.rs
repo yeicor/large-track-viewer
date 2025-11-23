@@ -1,6 +1,6 @@
 //! RouteCollection - Top-level manager for routes, quadtree, and queries
 
-use crate::data::{Quadtree, Result, Route};
+use crate::{Quadtree, Result, Route};
 use geo::Rect;
 use rayon::prelude::*;
 use std::path::Path;
@@ -127,7 +127,7 @@ impl RouteCollection {
     }
 
     /// Query for visible segments in the given viewport
-    pub fn query_visible(&self, geo_viewport: Rect<f64>) -> Vec<&crate::data::SimplifiedSegment> {
+    pub fn query_visible(&self, geo_viewport: Rect<f64>) -> Vec<&crate::SimplifiedSegment> {
         self.quadtree.query(geo_viewport)
     }
 
@@ -217,7 +217,7 @@ mod tests {
         collection.add_route(gpx).unwrap();
 
         // Query with a viewport that should contain the route
-        use crate::data::utils::wgs84_to_mercator;
+        use crate::utils::wgs84_to_mercator;
         let min = wgs84_to_mercator(51.5, -0.2);
         let max = wgs84_to_mercator(51.6, -0.0);
         let viewport = geo::Rect::new(
@@ -277,7 +277,7 @@ mod tests {
 
         // Query with a viewport far away from the route
         // Using coordinates in Asia far from London
-        use crate::data::utils::wgs84_to_mercator;
+        use crate::utils::wgs84_to_mercator;
         let min = wgs84_to_mercator(35.0, 135.0); // Japan area
         let max = wgs84_to_mercator(36.0, 136.0);
         let viewport = geo::Rect::new(
@@ -322,7 +322,7 @@ mod tests {
         assert_eq!(collection.total_points(), 10000);
 
         // Query should still work efficiently
-        use crate::data::utils::wgs84_to_mercator;
+        use crate::utils::wgs84_to_mercator;
         let min = wgs84_to_mercator(51.5, -0.2);
         let max = wgs84_to_mercator(51.6, -0.0);
         let viewport = geo::Rect::new(

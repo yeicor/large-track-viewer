@@ -1,6 +1,6 @@
 //! Quadtree spatial index for efficient LOD-based querying
 
-use crate::data::{DataError, Result, Route, SegmentPart, SimplifiedSegment, utils};
+use crate::{DataError, Result, Route, SegmentPart, SimplifiedSegment, utils};
 use geo::{LineString, Point, Rect};
 use std::sync::Arc;
 
@@ -100,7 +100,7 @@ impl Quadtree {
 
     /// Calculate the appropriate LOD level for the given viewport
     fn calculate_target_level(&self, geo_viewport: Rect<f64>) -> u32 {
-        use crate::data::utils::EARTH_SIZE_METERS;
+        use crate::utils::EARTH_SIZE_METERS;
 
         let viewport_width_meters = geo_viewport.width();
 
@@ -120,7 +120,7 @@ impl Quadtree {
 impl QuadtreeNode {
     /// Create a root node covering the entire Earth
     fn new_root(reference_pixel_viewport: Rect<f64>, bias: f64) -> Self {
-        use crate::data::utils::{EARTH_MERCATOR_MAX, EARTH_MERCATOR_MIN};
+        use crate::utils::{EARTH_MERCATOR_MAX, EARTH_MERCATOR_MIN};
 
         let bounding_box = Rect::new(
             geo::Coord {
@@ -146,7 +146,7 @@ impl QuadtreeNode {
 
     /// Calculate pixel tolerance for a given level
     fn calculate_pixel_tolerance(level: u32, pixel_viewport: Rect<f64>, bias: f64) -> f64 {
-        use crate::data::utils::EARTH_SIZE_METERS;
+        use crate::utils::EARTH_SIZE_METERS;
 
         let node_size_meters = EARTH_SIZE_METERS / (1u64 << level) as f64;
         let pixels_per_meter = pixel_viewport.width() / node_size_meters;

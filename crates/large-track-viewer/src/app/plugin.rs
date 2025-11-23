@@ -3,8 +3,8 @@
 //! This module provides a custom walkers plugin that queries visible route segments
 //! from the data module and renders them on the map with proper LOD handling.
 
-use crate::data::{self, RouteCollection};
 use egui::{Color32, Stroke};
+use large_track_lib::{RouteCollection, SimplifiedSegment, utils};
 use walkers::{Plugin, Projector};
 
 /// Plugin for rendering GPX tracks on the map
@@ -55,7 +55,7 @@ impl TrackPlugin {
     /// Render a single simplified segment
     fn render_segment(
         &self,
-        segment: &data::SimplifiedSegment,
+        segment: &SimplifiedSegment,
         projector: &Projector,
         painter: &egui::Painter,
     ) {
@@ -114,11 +114,11 @@ impl Plugin for TrackPlugin {
 
         {
             // Convert to Web Mercator coordinates for querying
-            let min_mercator = data::utils::wgs84_to_mercator(
+            let min_mercator = utils::wgs84_to_mercator(
                 top_left_pos.y().min(bottom_right_pos.y()),
                 top_left_pos.x().min(bottom_right_pos.x()),
             );
-            let max_mercator = data::utils::wgs84_to_mercator(
+            let max_mercator = utils::wgs84_to_mercator(
                 top_left_pos.y().max(bottom_right_pos.y()),
                 top_left_pos.x().max(bottom_right_pos.x()),
             );
@@ -137,7 +137,7 @@ impl Plugin for TrackPlugin {
 
             // Query visible segments from the collection
             // Clone the segments to owned data to avoid lifetime issues
-            let segments: Vec<data::SimplifiedSegment> = {
+            let segments: Vec<SimplifiedSegment> = {
                 profiling::scope!("query_visible");
                 let collection = self.collection.read().unwrap();
                 collection
@@ -187,11 +187,11 @@ impl Plugin for BoundaryContextPlugin {
             projector.unproject(egui::Vec2::new(viewport_rect.max.x, viewport_rect.max.y));
 
         {
-            let min_mercator = data::utils::wgs84_to_mercator(
+            let min_mercator = utils::wgs84_to_mercator(
                 top_left_pos.y().min(bottom_right_pos.y()),
                 top_left_pos.x().min(bottom_right_pos.x()),
             );
-            let max_mercator = data::utils::wgs84_to_mercator(
+            let max_mercator = utils::wgs84_to_mercator(
                 top_left_pos.y().max(bottom_right_pos.y()),
                 top_left_pos.x().max(bottom_right_pos.x()),
             );
@@ -207,7 +207,7 @@ impl Plugin for BoundaryContextPlugin {
                 },
             );
 
-            let segments: Vec<data::SimplifiedSegment> = {
+            let segments: Vec<SimplifiedSegment> = {
                 let collection = self.collection.read().unwrap();
                 collection
                     .query_visible(viewport)

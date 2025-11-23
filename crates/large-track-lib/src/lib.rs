@@ -22,7 +22,7 @@
 //! # Usage Example
 //!
 //! ```rust
-//! use large_track_viewer::data::{RouteCollection, Config};
+//! use large_track_data::{RouteCollection, Config};
 //! use std::fs::File;
 //! use std::io::BufReader;
 //!
@@ -43,7 +43,7 @@
 //! // In real usage: collection.add_route(gpx)?;
 //!
 //! // Query visible segments for a viewport (in Web Mercator coordinates)
-//! use large_track_viewer::data::utils::wgs84_to_mercator;
+//! use large_track_data::utils::wgs84_to_mercator;
 //! // Query visible segments (after routes are added)
 //! // let min = wgs84_to_mercator(51.5, -0.2);
 //! // let max = wgs84_to_mercator(51.6, -0.0);

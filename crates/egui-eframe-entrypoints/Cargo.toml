@@ -1,0 +1,58 @@
+[package]
+name = "egui-eframe-entrypoints"
+version = "0.1.0"
+authors.workspace = true
+description = "Cross-platform entry points system for egui/eframe applications (native, web, android)"
+repository.workspace = true
+license.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["native", "profiling"]
+native = ["tokio/rt-multi-thread"]
+web = ["tokio/rt"]
+android = ["eframe/android-game-activity"]
+profiling = ["profiling/profile-with-tracing", "dep:tracing-chrome", "dep:tracing-subscriber", "dep:open"]
+
+[dependencies]
+# === UI Framework ===
+eframe.workspace = true
+egui.workspace = true
+winit.workspace = true
+wgpu = "*" # Use the same version as eframe, with all default features enabled (eframe does not disable the backends)
+
+# === Async Runtime ===
+tokio.workspace = true
+
+# === CLI ===
+clap.workspace = true
+
+# === Logging & profiling ===
+tracing.workspace = true
+profiling.workspace = true
+tracing-chrome = { version = "0.7", optional = true }
+
+# === Misc ===
+shadow-rs = { version = "1.4", default-features = false }
+
+# === Native (desktop & mobile) ===
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tracing-subscriber = { version = "0.3", optional = true, features = ["env-filter"] }
+open = { version = "5.0", optional = true }
+
+# === Web ===
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+web-sys.workspace = true
+
+# === Android ===
+[target.'cfg(target_os = "android")'.dependencies]
+log = "0.4"
+android_logger = "0.15"
+
+# === Build ===
+[build-dependencies]
+shadow-rs = { version = "1.4", features = ["git2"] }

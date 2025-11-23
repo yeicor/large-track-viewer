@@ -1,6 +1,6 @@
 //! Segment structures for external indexing into route data
 
-use crate::data::Route;
+use crate::Route;
 use std::ops::Range;
 use std::sync::Arc;
 

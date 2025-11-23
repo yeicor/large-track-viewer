@@ -1,5 +1,5 @@
-use crate::entrypoints::cli::parse_args;
 use clap::Parser;
+use egui_eframe_entrypoints::parse_args;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug, Clone)]

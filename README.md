@@ -184,39 +184,95 @@ The level-of-detail system uses:
 
 ### Project Structure
 
+The project is organized as a Cargo workspace with three reusable crates:
+
 ```
 large-track-viewer/
-├── src/
-│   ├── app/           # Application UI and integration
-│   │   ├── mod.rs     # Main app structure
-│   │   ├── plugin.rs  # Walkers track rendering plugin
-│   │   ├── state.rs   # State management
-│   │   ├── ui_panels.rs # UI components
-│   │   └── settings.rs  # CLI settings
-│   ├── data/          # Core data module
-│   │   ├── mod.rs     # Public API
-│   │   ├── route.rs   # GPX route storage
-│   │   ├── segment.rs # Simplified segments
-│   │   ├── quadtree.rs # Spatial index
-│   │   ├── collection.rs # Route manager
-│   │   └── utils.rs   # Coordinate transforms
-│   ├── entrypoints/   # Platform entry points
-│   └── lib.rs         # Library root
-├── Cargo.toml
+├── crates/
+│   ├── large-track-data/           # 📦 Reusable data structures crate
+│   │   ├── src/
+│   │   │   ├── lib.rs              # Public API
+│   │   │   ├── route.rs            # GPX route storage
+│   │   │   ├── segment.rs          # Simplified segments
+│   │   │   ├── quadtree.rs         # Spatial index
+│   │   │   ├── collection.rs       # Route manager
+│   │   │   └── utils.rs            # Coordinate transforms
+│   │   ├── Cargo.toml
+│   │   └── README.md
+│   │
+│   ├── egui-eframe-entrypoints/    # 📦 Reusable entrypoints crate
+│   │   ├── src/
+│   │   │   ├── lib.rs              # Cross-platform entry points
+│   │   │   ├── cli.rs              # CLI/URL argument parsing
+│   │   │   ├── profiling.rs        # Profiling integration
+│   │   │   ├── metadata.rs         # Build version info
+│   │   │   ├── run.rs              # Generic app runner
+│   │   │   └── web.rs              # Web-specific code
+│   │   ├── build.rs                # shadow-rs build metadata
+│   │   ├── Cargo.toml
+│   │   └── README.md
+│   │
+│   └── large-track-viewer/         # 📦 Main application crate
+│       ├── src/
+│       │   ├── app/                # Application UI and logic
+│       │   │   ├── mod.rs          # Main app structure
+│       │   │   ├── plugin.rs       # Walkers track rendering plugin
+│       │   │   ├── state.rs        # State management
+│       │   │   ├── ui_panels.rs    # UI components
+│       │   │   └── settings.rs     # CLI settings
+│       │   ├── lib.rs              # Library root
+│       │   └── main.rs             # Binary entry point
+│       └── Cargo.toml
+│
+├── Cargo.toml                      # Workspace root
 └── README.md
+```
+
+### Crate Overview
+
+#### `large-track-data`
+A standalone, reusable library for efficient GPX track storage and querying:
+- Quadtree spatial indexing with LOD support
+- Parallel loading and processing
+- Web Mercator coordinate system
+- Can be used in any Rust project needing GPX track management
+
+#### `egui-eframe-entrypoints`
+A generic, reusable entry points system for egui/eframe apps:
+- Cross-platform support (native, web, Android)
+- CLI argument parsing (native) and URL query parsing (web)
+- Profiling integration with puffin
+- Build metadata display
+- Can be used by any egui/eframe application
+
+#### `large-track-viewer`
+The main application that ties everything together:
+- Uses `large-track-data` for GPX track management
+- Uses `egui-eframe-entrypoints` for cross-platform entry points
+- Implements the UI, map integration, and user interactions
 ```
 
 ### Building for Different Platforms
 
+The workspace structure allows you to build individual crates or the entire workspace:
+
 #### Desktop (Native)
 ```bash
-cargo build --release --features native
+# Build the entire workspace
+cargo build
+
+# Build only the main app
+cargo build -p large-track-viewer
+
+# Build with release optimizations
+cargo build --release
 ```
 
 #### Web (WASM)
 ```bash
+# Using trunk (build system for WASM)
 trunk build --release
-trunk serve  # For development
+trunk serve  # For development with hot reload
 ```
 
 #### Android
@@ -226,17 +282,49 @@ cd android
 ./gradlew assembleRelease
 ```
 
+#### Build Individual Crates
+```bash
+# Build just the data structures library
+cargo build -p large-track-data
+
+# Build just the entrypoints library
+cargo build -p egui-eframe-entrypoints
+```
+
 ### Running Tests
 
 ```bash
-# Run all tests
+# Run all tests in the workspace
 cargo test
 
-# Run data module tests only
-cargo test --lib data
+# Run tests for a specific crate
+cargo test -p large-track-data
+cargo test -p egui-eframe-entrypoints
+cargo test -p large-track-viewer
 
-# Run with profiling
+# Run with profiling enabled
 cargo test --features profiling
+```
+
+### Using the Reusable Crates
+
+Both `large-track-data` and `egui-eframe-entrypoints` are designed to be reusable in other projects:
+
+#### Using `large-track-data` in your project
+```toml
+[dependencies]
+large-track-data = { git = "https://github.com/yeicor/large-track-viewer", package = "large-track-data" }
+```
+
+#### Using `egui-eframe-entrypoints` in your project
+```toml
+[dependencies]
+egui-eframe-entrypoints = { git = "https://github.com/yeicor/large-track-viewer", package = "egui-eframe-entrypoints" }
+```
+
+See each crate's README for detailed usage instructions:
+- [`large-track-data/README.md`](crates/large-track-data/README.md)
+- [`egui-eframe-entrypoints/README.md`](crates/egui-eframe-entrypoints/README.md)
 ```
 
 ## 📝 License

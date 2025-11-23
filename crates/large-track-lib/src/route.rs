@@ -1,6 +1,6 @@
 //! Route storage and parsing module
 
-use crate::data::{DataError, Result, utils};
+use crate::{DataError, Result, utils};
 use geo::Rect;
 use std::sync::Arc;
 

@@ -14,8 +14,8 @@ mod ui_panels;
 use crate::app::plugin::TrackPlugin;
 use crate::app::settings::Settings;
 use crate::app::state::AppState;
-use crate::entrypoints::profiling::profiling_ui;
 use eframe::egui;
+use egui_eframe_entrypoints::profiling_ui;
 use walkers::{HttpTiles, Map, MapMemory, sources::OpenStreetMap};
 
 /// Main application structure

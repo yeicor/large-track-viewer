@@ -1,0 +1,25 @@
+[package]
+name = "large-track-lib"
+version = "0.1.10"
+authors.workspace = true
+description = "Efficient storage and querying of large-scale GPX track collections with LOD quadtree indexing"
+repository.workspace = true
+license.workspace = true
+edition.workspace = true
+
+[dependencies]
+# === GPX and Geo ===
+gpx.workspace = true
+geo.workspace = true
+
+# === Data structures ===
+rayon = "1.10"
+
+# === Error Handling ===
+thiserror = "2.0"
+
+# === Logging ===
+tracing.workspace = true
+
+[dev-dependencies]
+# No additional dev dependencies needed for now
