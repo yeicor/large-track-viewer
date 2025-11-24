@@ -11,8 +11,6 @@ use walkers::{Plugin, Projector};
 pub struct TrackPlugin {
     /// Reference to the route collection
     collection: std::sync::Arc<std::sync::RwLock<RouteCollection>>,
-    /// Line color for rendering tracks
-    color: Color32,
     /// Line width for rendering tracks
     width: f32,
     /// Whether to show boundary context (smoother rendering at viewport edges)
@@ -21,14 +19,9 @@ pub struct TrackPlugin {
 
 impl TrackPlugin {
     /// Create a new track plugin
-    pub fn new(
-        collection: std::sync::Arc<std::sync::RwLock<RouteCollection>>,
-        color: Color32,
-        width: f32,
-    ) -> Self {
+    pub fn new(collection: std::sync::Arc<std::sync::RwLock<RouteCollection>>, width: f32) -> Self {
         Self {
             collection,
-            color,
             width,
             show_boundary_context: true,
         }
@@ -38,12 +31,6 @@ impl TrackPlugin {
     pub fn with_boundary_context(mut self, enabled: bool) -> Self {
         self.show_boundary_context = enabled;
         self
-    }
-
-    /// Set the line color
-    #[allow(dead_code)] // May be used for dynamic color changes
-    pub fn set_color(&mut self, color: Color32) {
-        self.color = color;
     }
 
     /// Set the line width
@@ -59,7 +46,9 @@ impl TrackPlugin {
         projector: &Projector,
         painter: &egui::Painter,
     ) {
-        let stroke = Stroke::new(self.width, self.color);
+        // Use fixed color for now (blue) - TODO: per-track colors
+        let color = Color32::from_rgb(70, 130, 220);
+        let stroke = Stroke::new(self.width, color);
 
         for part in &segment.parts {
             let points = if self.show_boundary_context {

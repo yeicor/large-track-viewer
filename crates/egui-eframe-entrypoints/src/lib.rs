@@ -73,7 +73,8 @@ pub async fn native_main(
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 720.0])
-            .with_title(app_name),
+            .with_title(app_name)
+            .with_drag_and_drop(true),
         ..Default::default()
     };
 

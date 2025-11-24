@@ -1,214 +1,179 @@
 //! UI panels for the application
 //!
-//! This module provides reusable UI components for settings, statistics,
-//! file management, and other control panels.
+//! This module provides reusable UI components for the new clean sidebar design
+//! with tabs, map controls, and drag-and-drop support.
 
-use crate::app::state::{AppState, TilesProvider};
+use crate::app::state::{AppState, SidebarTab, TilesProvider};
 use egui::{Color32, RichText, Ui};
 
-/// Render the settings panel
-pub fn settings_panel(ui: &mut Ui, state: &mut AppState) {
-    ui.heading("Settings");
-    ui.separator();
+/// Render the sidebar toggle button (overlaid on top-right of map)
+pub fn sidebar_toggle_button(ui: &mut Ui, state: &mut AppState) {
+    let button_size = egui::vec2(40.0, 40.0);
+    let margin = 10.0;
 
-    ui.collapsing("Display", |ui| {
-        ui.label("Track Appearance");
-        ui.add_space(4.0);
+    // Position button in top-right corner
+    let rect = ui.max_rect();
+    let button_pos = rect.right_top() + egui::vec2(-button_size.x - margin, margin);
+    let button_rect = egui::Rect::from_min_size(button_pos, button_size);
 
-        // Line width slider
-        ui.horizontal(|ui| {
-            ui.label("Line Width:");
-            ui.add(
-                egui::Slider::new(&mut state.ui_settings.line_width, 0.5..=10.0)
-                    .suffix(" px")
-                    .step_by(0.5),
-            );
-        });
+    let response = ui.allocate_rect(button_rect, egui::Sense::click());
 
-        // Color picker
-        ui.horizontal(|ui| {
-            ui.label("Track Color:");
-            ui.color_edit_button_srgba(&mut state.ui_settings.color);
-        });
+    if response.clicked() {
+        state.ui_settings.sidebar_open = !state.ui_settings.sidebar_open;
+    }
 
-        ui.add_space(8.0);
-    });
+    // Draw button background
+    let bg_color = if response.hovered() {
+        ui.visuals().widgets.hovered.bg_fill
+    } else {
+        ui.visuals().widgets.inactive.bg_fill
+    };
 
-    ui.collapsing("Level of Detail", |ui| {
-        ui.label("LOD Bias (Higher = More Detail)");
-        ui.add_space(4.0);
+    ui.painter().rect_filled(
+        button_rect,
+        5.0, // rounding
+        bg_color,
+    );
 
-        let mut bias = state.ui_settings.bias;
-        let changed = ui
-            .add(
-                egui::Slider::new(&mut bias, 0.1..=10.0)
-                    .logarithmic(true)
-                    .step_by(0.1),
-            )
-            .changed();
+    // Draw icon (hamburger menu always)
+    let icon = if state.ui_settings.sidebar_open {
+        "☰"
+    } else {
+        "☰"
+    };
 
-        if changed {
-            state.update_bias(bias);
-        }
-
-        ui.add_space(4.0);
-        ui.label(
-            RichText::new("⚠ Note: Changing bias requires reloading routes")
-                .small()
-                .color(ui.visuals().warn_fg_color),
-        );
-
-        ui.add_space(8.0);
-    });
-
-    ui.collapsing("Map Tiles", |ui| {
-        ui.label("Select Tile Provider");
-        ui.add_space(4.0);
-
-        for provider in TilesProvider::all() {
-            let selected = state.ui_settings.tiles_provider == *provider;
-            if ui.selectable_label(selected, provider.name()).clicked() {
-                state.ui_settings.tiles_provider = *provider;
-            }
-        }
-
-        ui.add_space(4.0);
-        ui.label(
-            RichText::new(state.ui_settings.tiles_provider.attribution())
-                .small()
-                .italics(),
-        );
-
-        ui.add_space(8.0);
-    });
-
-    ui.collapsing("Debug", |ui| {
-        ui.checkbox(
-            &mut state.ui_settings.show_boundary_debug,
-            "Show boundary context markers",
-        );
-        ui.label(RichText::new("Green = prev point, Red = next point").small());
-
-        ui.add_space(8.0);
-    });
-
-    ui.separator();
-
-    // Panel visibility toggles
-    ui.collapsing("Panels", |ui| {
-        ui.checkbox(&mut state.ui_settings.show_stats, "Show Statistics");
-        ui.checkbox(&mut state.ui_settings.show_settings, "Show Settings");
-    });
+    ui.painter().text(
+        button_rect.center(),
+        egui::Align2::CENTER_CENTER,
+        icon,
+        egui::FontId::proportional(20.0),
+        ui.visuals().text_color(),
+    );
 }
 
-/// Render the statistics panel
-pub fn statistics_panel(ui: &mut Ui, state: &AppState) {
-    ui.heading("Statistics");
+/// Helper to draw a control button
+fn draw_control_button(ui: &mut Ui, rect: egui::Rect, icon: &str, tooltip: &str) -> bool {
+    let response = ui.allocate_rect(rect, egui::Sense::click());
+
+    let bg_color = if response.hovered() {
+        ui.visuals().widgets.hovered.bg_fill
+    } else {
+        ui.visuals().widgets.inactive.bg_fill
+    };
+
+    ui.painter().rect_filled(rect, 5.0, bg_color);
+
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        icon,
+        egui::FontId::proportional(16.0),
+        ui.visuals().text_color(),
+    );
+
+    let response = if response.hovered() {
+        response.on_hover_text(tooltip)
+    } else {
+        response
+    };
+
+    response.clicked()
+}
+
+/// Render the main sidebar (responsive: side on landscape, bottom on portrait)
+pub fn render_sidebar(ctx: &egui::Context, state: &mut AppState) {
+    if !state.ui_settings.sidebar_open {
+        return;
+    }
+
+    let screen_size = ctx.viewport_rect().size();
+    let is_portrait = screen_size.y > screen_size.x;
+
+    if is_portrait {
+        render_sidebar_bottom(ctx, state);
+    } else {
+        render_sidebar_side(ctx, state);
+    }
+}
+
+/// Render sidebar from the side (landscape mode)
+fn render_sidebar_side(ctx: &egui::Context, state: &mut AppState) {
+    egui::SidePanel::right("main_sidebar")
+        .default_width(320.0)
+        .min_width(280.0)
+        .max_width(500.0)
+        .resizable(true)
+        .show(ctx, |ui| {
+            render_sidebar_content(ui, state, false);
+        });
+}
+
+/// Render sidebar from the bottom (portrait mode)
+fn render_sidebar_bottom(ctx: &egui::Context, state: &mut AppState) {
+    egui::TopBottomPanel::bottom("main_sidebar")
+        .default_height(300.0)
+        .min_height(200.0)
+        .max_height(ctx.viewport_rect().height() * 0.6)
+        .resizable(true)
+        .show(ctx, |ui| {
+            render_sidebar_content(ui, state, true);
+        });
+}
+
+/// Render the sidebar content (shared between portrait and landscape)
+fn render_sidebar_content(ui: &mut Ui, state: &mut AppState, is_portrait: bool) {
+    // Tab selection
+    ui.horizontal(|ui| {
+        ui.selectable_value(
+            &mut state.ui_settings.active_tab,
+            SidebarTab::Tracks,
+            "📂 Tracks",
+        );
+        ui.selectable_value(
+            &mut state.ui_settings.active_tab,
+            SidebarTab::Settings,
+            "⚙ Settings",
+        );
+    });
+
     ui.separator();
 
-    ui.label(
-        RichText::new("📊 Data Overview")
-            .strong()
-            .color(ui.visuals().strong_text_color()),
-    );
+    // Tab content
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| match state.ui_settings.active_tab {
+            SidebarTab::Tracks => render_tracks_tab(ui, state, is_portrait),
+            SidebarTab::Settings => render_settings_tab(ui, state, is_portrait),
+        });
+}
+
+/// Render the Tracks tab
+fn render_tracks_tab(ui: &mut Ui, state: &mut AppState, is_portrait: bool) {
+    ui.heading("Loaded Tracks");
     ui.add_space(4.0);
 
-    // Route stats
-    ui.horizontal(|ui| {
-        ui.label("Routes:");
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(RichText::new(state.stats.format_routes()).strong());
-        });
-    });
-
-    ui.horizontal(|ui| {
-        ui.label("Total Points:");
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(RichText::new(state.stats.format_points()).strong());
-        });
-    });
-
-    ui.horizontal(|ui| {
-        ui.label("Total Distance:");
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(RichText::new(state.stats.format_distance()).strong());
-        });
-    });
-
-    ui.add_space(8.0);
-    ui.separator();
-
-    // Performance stats
-    ui.label(
-        RichText::new("⚡ Performance")
-            .strong()
-            .color(ui.visuals().strong_text_color()),
-    );
-    ui.add_space(4.0);
-
-    if state.stats.last_query_time_ms > 0.0 {
-        ui.horizontal(|ui| {
-            ui.label("Last Query:");
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let color = if state.stats.last_query_time_ms < 16.0 {
-                    Color32::GREEN
-                } else if state.stats.last_query_time_ms < 100.0 {
-                    Color32::YELLOW
-                } else {
-                    Color32::RED
-                };
-                ui.label(
-                    RichText::new(format!("{:.1} ms", state.stats.last_query_time_ms)).color(color),
-                );
-            });
-        });
-
-        ui.horizontal(|ui| {
-            ui.label("Segments Rendered:");
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(RichText::new(format!("{}", state.stats.last_query_segments)).strong());
-            });
+    // Action buttons
+    if is_portrait {
+        // Vertical layout for portrait
+        ui.vertical(|ui| {
+            if ui.button("📂 Load GPX Files...").clicked() {
+                state.file_loader.show_picker = true;
+            }
+            if ui.button("🗑 Clear All").clicked() {
+                state.clear_routes();
+            }
         });
     } else {
-        ui.label(RichText::new("No query data yet").italics().weak());
+        // Horizontal layout for landscape
+        ui.horizontal(|ui| {
+            if ui.button("📂 Load GPX Files...").clicked() {
+                state.file_loader.show_picker = true;
+            }
+            if ui.button("🗑 Clear All").clicked() {
+                state.clear_routes();
+            }
+        });
     }
-
-    ui.add_space(8.0);
-    ui.separator();
-
-    // Viewport info
-    if let Some((min_lat, min_lon, max_lat, max_lon)) = state.stats.viewport_bounds {
-        ui.label(
-            RichText::new("🗺 Viewport")
-                .strong()
-                .color(ui.visuals().strong_text_color()),
-        );
-        ui.add_space(4.0);
-
-        ui.label(format!("Lat: {:.4}° to {:.4}°", min_lat, max_lat));
-        ui.label(format!("Lon: {:.4}° to {:.4}°", min_lon, max_lon));
-
-        let width_deg = (max_lon - min_lon).abs();
-        let height_deg = (max_lat - min_lat).abs();
-        ui.label(format!("Size: {:.4}° × {:.4}°", width_deg, height_deg));
-    }
-}
-
-/// Render the file management panel
-pub fn file_management_panel(ui: &mut Ui, state: &mut AppState) {
-    ui.heading("Files");
-    ui.separator();
-
-    // Add file button
-    ui.horizontal(|ui| {
-        if ui.button("📂 Load GPX File...").clicked() {
-            state.file_loader.show_picker = true;
-        }
-
-        if ui.button("🗑 Clear All").clicked() {
-            state.clear_routes();
-        }
-    });
 
     ui.add_space(8.0);
 
@@ -239,32 +204,75 @@ pub fn file_management_panel(ui: &mut Ui, state: &mut AppState) {
         ui.add_space(8.0);
     }
 
+    ui.separator();
+
+    // Statistics overview
+    ui.label(RichText::new("📊 Overview").strong());
+    ui.add_space(4.0);
+
+    egui::Grid::new("stats_grid")
+        .num_columns(2)
+        .spacing([10.0, 4.0])
+        .show(ui, |ui| {
+            ui.label("Files:");
+            ui.label(RichText::new(format!("{}", state.file_loader.loaded_files.len())).strong());
+            ui.end_row();
+
+            ui.label("Routes:");
+            ui.label(RichText::new(state.stats.format_routes()).strong());
+            ui.end_row();
+
+            ui.label("Points:");
+            ui.label(RichText::new(state.stats.format_points()).strong());
+            ui.end_row();
+
+            ui.label("Distance:");
+            ui.label(RichText::new(state.stats.format_distance()).strong());
+            ui.end_row();
+        });
+
+    ui.add_space(8.0);
+    ui.separator();
+
     // Loaded files list
     if !state.file_loader.loaded_files.is_empty() {
-        ui.separator();
         ui.label(
-            RichText::new(format!(
-                "✓ Loaded ({} files)",
-                state.file_loader.loaded_files.len()
-            ))
-            .strong()
-            .color(Color32::GREEN),
+            RichText::new("✓ Loaded Files")
+                .strong()
+                .color(Color32::GREEN),
         );
         ui.add_space(4.0);
 
+        let mut to_remove = None;
+
         egui::ScrollArea::vertical()
-            .max_height(150.0)
+            .max_height(200.0)
             .show(ui, |ui| {
-                for file in &state.file_loader.loaded_files {
-                    ui.label(
-                        RichText::new(format!(
-                            "• {}",
-                            file.file_name().unwrap_or_default().to_string_lossy()
-                        ))
-                        .small(),
-                    );
+                for (idx, (path, _)) in state.file_loader.loaded_files.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new(format!(
+                                "📄 {}",
+                                path.file_name().unwrap_or_default().to_string_lossy()
+                            ))
+                            .small(),
+                        );
+
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.small_button("🗑").clicked() {
+                                to_remove = Some(idx);
+                            }
+                        });
+                    });
                 }
             });
+
+        // Handle removal (can't modify while iterating)
+        if let Some(idx) = to_remove {
+            state.remove_file(idx);
+        }
+
+        ui.add_space(8.0);
     }
 
     // Error list
@@ -303,18 +311,172 @@ pub fn file_management_panel(ui: &mut Ui, state: &mut AppState) {
     }
 }
 
+/// Render the Settings tab
+fn render_settings_tab(ui: &mut Ui, state: &mut AppState, _is_portrait: bool) {
+    ui.heading("Settings");
+    ui.add_space(4.0);
+
+    // Track appearance
+    ui.collapsing("Track Appearance", |ui| {
+        ui.add_space(4.0);
+
+        ui.horizontal(|ui| {
+            ui.label("Line Width:");
+            ui.add(
+                egui::Slider::new(&mut state.ui_settings.line_width, 0.5..=10.0)
+                    .suffix(" px")
+                    .step_by(0.5),
+            );
+        });
+
+        ui.add_space(4.0);
+    });
+
+    ui.add_space(4.0);
+
+    // Level of Detail
+    ui.collapsing("Level of Detail", |ui| {
+        ui.add_space(4.0);
+
+        ui.label("LOD Bias (Higher = More Detail)");
+        ui.add_space(4.0);
+
+        let mut bias = state.ui_settings.bias;
+        let changed = ui
+            .add(
+                egui::Slider::new(&mut bias, 0.1..=10.0)
+                    .logarithmic(true)
+                    .step_by(0.1),
+            )
+            .changed();
+
+        if changed {
+            state.update_bias(bias);
+        }
+
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new("⚠ Note: Changing bias requires reloading routes")
+                .small()
+                .color(ui.visuals().warn_fg_color),
+        );
+
+        ui.add_space(4.0);
+    });
+
+    ui.add_space(4.0);
+
+    // Map Tiles
+    ui.collapsing("Map Tiles", |ui| {
+        ui.add_space(4.0);
+
+        ui.label("Select Tile Provider");
+        ui.add_space(4.0);
+
+        for provider in TilesProvider::all() {
+            let selected = state.ui_settings.tiles_provider == *provider;
+            if ui.selectable_label(selected, provider.name()).clicked() {
+                state.ui_settings.tiles_provider = *provider;
+            }
+        }
+
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new(state.ui_settings.tiles_provider.attribution())
+                .small()
+                .italics(),
+        );
+
+        ui.add_space(4.0);
+    });
+
+    ui.add_space(4.0);
+
+    // Debug options
+    ui.collapsing("Debug", |ui| {
+        ui.add_space(4.0);
+
+        ui.checkbox(
+            &mut state.ui_settings.show_boundary_debug,
+            "Show boundary context markers",
+        );
+        ui.label(RichText::new("Green = prev point, Red = next point").small());
+
+        ui.add_space(4.0);
+    });
+
+    ui.add_space(4.0);
+
+    // Profiling
+    ui.collapsing("Profiling", |ui| {
+        ui.add_space(4.0);
+
+        ui.checkbox(&mut state.ui_settings.show_profiling, "Show profiling data");
+
+        ui.add_space(8.0);
+
+        if state.ui_settings.show_profiling {
+            ui.separator();
+            egui_eframe_entrypoints::profiling_ui(ui);
+        }
+
+        ui.add_space(4.0);
+    });
+
+    ui.add_space(4.0);
+
+    // Performance stats
+    ui.collapsing("Performance", |ui| {
+        ui.add_space(4.0);
+
+        if state.stats.last_query_time_ms > 0.0 {
+            egui::Grid::new("perf_grid")
+                .num_columns(2)
+                .spacing([10.0, 4.0])
+                .show(ui, |ui| {
+                    ui.label("Last Query:");
+                    let color = if state.stats.last_query_time_ms < 16.0 {
+                        Color32::GREEN
+                    } else if state.stats.last_query_time_ms < 100.0 {
+                        Color32::YELLOW
+                    } else {
+                        Color32::RED
+                    };
+                    ui.label(
+                        RichText::new(format!("{:.1} ms", state.stats.last_query_time_ms))
+                            .color(color),
+                    );
+                    ui.end_row();
+
+                    ui.label("Segments Rendered:");
+                    ui.label(
+                        RichText::new(format!("{}", state.stats.last_query_segments)).strong(),
+                    );
+                    ui.end_row();
+                });
+        } else {
+            ui.label(RichText::new("No query data yet").italics().weak());
+        }
+
+        ui.add_space(4.0);
+    });
+}
+
 /// Render a simple file picker (native only)
 #[cfg(not(target_arch = "wasm32"))]
 pub fn show_file_picker(state: &mut AppState) {
     if state.file_loader.show_picker {
         state.file_loader.show_picker = false;
 
-        if let Some(path) = rfd::FileDialog::new()
+        if let Some(paths) = rfd::FileDialog::new()
             .add_filter("GPX Files", &["gpx"])
             .add_filter("All Files", &["*"])
-            .pick_file()
+            .pick_files()
+        // Changed to pick_files() to support multiple selection
         {
-            state.queue_file(path);
+            for path in paths {
+                state.queue_file(path);
+            }
         }
     }
 }
@@ -348,24 +510,27 @@ pub fn help_overlay(ctx: &egui::Context, show: &mut bool) {
             ui.label("• Left drag: Pan the map");
             ui.label("• Mouse wheel: Zoom in/out");
             ui.label("• Double click: Zoom in");
+            ui.label("• +/- buttons: Zoom (accessibility)");
             ui.add_space(8.0);
 
             ui.label(RichText::new("📂 Loading Tracks").strong());
-            ui.label("• Click 'Load GPX File' to add tracks");
-            ui.label("• Multiple files can be loaded");
+            ui.label("• Click 'Load GPX Files' in sidebar");
+            ui.label("• Drag & drop GPX files onto map");
+            ui.label("• Multiple files can be selected");
             ui.label("• Large files are indexed automatically");
             ui.add_space(8.0);
 
             ui.label(RichText::new("⚙️ Settings").strong());
+            ui.label("• Access via Settings tab in sidebar");
             ui.label("• Adjust LOD bias for detail level");
             ui.label("• Change colors and line width");
             ui.label("• Select different map tile providers");
             ui.add_space(8.0);
 
-            ui.label(RichText::new("⚡ Performance").strong());
-            ui.label("• LOD system adapts to zoom level");
-            ui.label("• Query times shown in statistics");
-            ui.label("• Target: <100ms for large datasets");
+            ui.label(RichText::new("💡 Tips").strong());
+            ui.label("• Toggle sidebar with ☰ button");
+            ui.label("• Sidebar adapts to screen orientation");
+            ui.label("• Press F1 to show/hide this help");
             ui.add_space(8.0);
 
             ui.separator();
@@ -375,4 +540,97 @@ pub fn help_overlay(ctx: &egui::Context, show: &mut bool) {
                     .italics(),
             );
         });
+}
+
+/// Handle drag and drop of GPX files
+pub fn handle_drag_and_drop(ctx: &egui::Context, state: &mut AppState) {
+    use egui::*;
+
+    // Read input state first (without calling other ctx methods)
+    let (has_hovered_files, dropped_files) =
+        ctx.input(|i| (!i.raw.hovered_files.is_empty(), i.raw.dropped_files.clone()));
+
+    // Preview dragged files - render OUTSIDE the input closure
+    if has_hovered_files {
+        let painter = ctx.layer_painter(LayerId::new(
+            Order::Foreground,
+            Id::new("drag_and_drop_overlay"),
+        ));
+
+        let screen_rect = ctx.viewport_rect();
+        painter.rect_filled(screen_rect, 0.0, Color32::from_black_alpha(180));
+
+        painter.text(
+            screen_rect.center(),
+            Align2::CENTER_CENTER,
+            "Drop GPX files here",
+            FontId::proportional(32.0),
+            Color32::WHITE,
+        );
+    }
+
+    // Handle dropped files
+    if !dropped_files.is_empty() {
+        for file in &dropped_files {
+            if let Some(path) = &file.path {
+                // Check if it's a GPX file
+                if path.extension().and_then(|s| s.to_str()) == Some("gpx") {
+                    state.queue_file(path.clone());
+                } else {
+                    tracing::warn!("Ignoring non-GPX file: {:?}", path);
+                }
+            }
+        }
+    }
+}
+
+/// Show mouse wheel zoom warning overlay with smooth fade animation
+pub fn show_wheel_zoom_warning(ui: &mut Ui, state: &mut AppState) {
+    use egui::*;
+
+    // Get fade alpha (0.0 to 1.0)
+    let alpha = state.get_wheel_warning_alpha();
+
+    if alpha <= 0.0 {
+        return;
+    }
+
+    // Request repaint for animation
+    ui.ctx().request_repaint();
+
+    // Semi-transparent overlay at the bottom center
+    let screen_rect = ui.max_rect();
+    let warning_width = 400.0;
+    let warning_height = 40.0;
+
+    let warning_pos = Pos2::new(
+        screen_rect.center().x - warning_width / 2.0,
+        screen_rect.center().y - warning_height / 2.0,
+    );
+
+    let warning_rect = Rect::from_min_size(warning_pos, Vec2::new(warning_width, warning_height));
+
+    let mut ui = ui.new_child(
+        UiBuilder::new()
+            .max_rect(warning_rect)
+            .layout(Layout::top_down(Align::Center)),
+    );
+
+    // Background - transparent with fade
+    let bg_alpha = (160.0 * alpha) as u8;
+    let painter = ui.painter();
+    painter.rect_filled(warning_rect, 8.0, Color32::from_black_alpha(bg_alpha));
+
+    ui.add_space(4.0);
+
+    // Icon and text with fade
+    let text_alpha = (255.0 * alpha) as u8;
+    ui.horizontal(|ui| {
+        ui.add_space(8.0);
+        ui.label(
+            RichText::new("🖱  Use Ctrl + scroll to zoom the map")
+                .size(24.0)
+                .color(Color32::from_rgba_premultiplied(255, 255, 255, text_alpha)),
+        );
+    });
 }
