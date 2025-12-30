@@ -2,7 +2,7 @@
 
 use geo::Point;
 
-/// Web Mercator bounds in meters
+/// Web Mercator bounds in meters (EPSG:3857)
 pub const EARTH_MERCATOR_MAX: f64 = 20037508.34;
 pub const EARTH_MERCATOR_MIN: f64 = -20037508.34;
 pub const EARTH_SIZE_METERS: f64 = EARTH_MERCATOR_MAX - EARTH_MERCATOR_MIN;
@@ -11,6 +11,13 @@ pub const EARTH_SIZE_METERS: f64 = EARTH_MERCATOR_MAX - EARTH_MERCATOR_MIN;
 pub const MAX_LATITUDE: f64 = 85.05112878;
 
 /// Convert WGS84 (lat, lon) to Web Mercator (x, y) in meters
+///
+/// # Arguments
+/// * `lat` - Latitude in degrees (-85.05 to 85.05)
+/// * `lon` - Longitude in degrees (-180 to 180)
+///
+/// # Returns
+/// A `Point<f64>` with x (easting) and y (northing) in meters
 pub fn wgs84_to_mercator(lat: f64, lon: f64) -> Point<f64> {
     // Clamp latitude to valid Web Mercator range
     let lat = lat.clamp(-MAX_LATITUDE, MAX_LATITUDE);
@@ -23,6 +30,13 @@ pub fn wgs84_to_mercator(lat: f64, lon: f64) -> Point<f64> {
 }
 
 /// Convert Web Mercator (x, y) in meters to WGS84 (lat, lon)
+///
+/// # Arguments
+/// * `x` - Easting in meters
+/// * `y` - Northing in meters
+///
+/// # Returns
+/// A tuple of (latitude, longitude) in degrees
 pub fn mercator_to_wgs84(x: f64, y: f64) -> (f64, f64) {
     let lon = (x / EARTH_MERCATOR_MAX) * 180.0;
     let lat = (std::f64::consts::PI / 2.0

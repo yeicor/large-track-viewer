@@ -1,11 +1,15 @@
 //! Route storage and parsing module
+//!
+//! This module provides the `Route` struct for storing parsed GPX data
+//! with precomputed metadata like bounding boxes and distances.
 
 use crate::{DataError, Result, utils};
 use geo::Rect;
 use std::sync::Arc;
 
-/// Represents a single GPX route with raw data
+/// Represents a single GPX route with raw data and precomputed metadata
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Route {
     /// The original GPX data
     gpx_data: gpx::Gpx,
@@ -15,6 +19,12 @@ pub struct Route {
 
 impl Route {
     /// Create a new Route from GPX data
+    ///
+    /// # Arguments
+    /// * `gpx_data` - Parsed GPX data containing tracks
+    ///
+    /// # Returns
+    /// An `Arc<Route>` on success, or an error if the route is empty or invalid
     pub fn new(gpx_data: gpx::Gpx) -> Result<Arc<Self>> {
         // Validate that the route has at least one point
         let has_points = gpx_data.tracks.iter().any(|track| {
@@ -128,7 +138,8 @@ impl Route {
     }
 
     /// Calculate total distance across all tracks and segments in meters
-    /// Uses Haversine formula for accurate distance calculation
+    ///
+    /// Uses the Haversine formula for accurate distance calculation on a sphere.
     pub fn total_distance(&self) -> f64 {
         let mut total = 0.0;
 
@@ -136,27 +147,31 @@ impl Route {
             for segment in &track.segments {
                 let points = &segment.points;
                 for i in 0..points.len().saturating_sub(1) {
-                    let p1 = points[i].point();
-                    let p2 = points[i + 1].point();
-
-                    // Haversine formula for distance between two lat/lon points
-                    let lat1 = p1.y().to_radians();
-                    let lat2 = p2.y().to_radians();
-                    let delta_lat = (p2.y() - p1.y()).to_radians();
-                    let delta_lon = (p2.x() - p1.x()).to_radians();
-
-                    let a = (delta_lat / 2.0).sin().powi(2)
-                        + lat1.cos() * lat2.cos() * (delta_lon / 2.0).sin().powi(2);
-                    let c = 2.0 * a.sqrt().atan2((1.0 - a).sqrt());
-
-                    // Earth's radius in meters
-                    const EARTH_RADIUS_M: f64 = 6371000.0;
-                    total += EARTH_RADIUS_M * c;
+                    total += Self::haversine_distance(&points[i], &points[i + 1]);
                 }
             }
         }
 
         total
+    }
+
+    /// Calculate the Haversine distance between two waypoints in meters
+    fn haversine_distance(p1: &gpx::Waypoint, p2: &gpx::Waypoint) -> f64 {
+        let point1 = p1.point();
+        let point2 = p2.point();
+
+        let lat1 = point1.y().to_radians();
+        let lat2 = point2.y().to_radians();
+        let delta_lat = (point2.y() - point1.y()).to_radians();
+        let delta_lon = (point2.x() - point1.x()).to_radians();
+
+        let a = (delta_lat / 2.0).sin().powi(2)
+            + lat1.cos() * lat2.cos() * (delta_lon / 2.0).sin().powi(2);
+        let c = 2.0 * a.sqrt().atan2((1.0 - a).sqrt());
+
+        // Earth's radius in meters
+        const EARTH_RADIUS_M: f64 = 6371000.0;
+        EARTH_RADIUS_M * c
     }
 }
 
@@ -229,7 +244,7 @@ mod tests {
 
         let distance = route.total_distance();
         // The test points are very close together (around London)
-        // Distance should be roughly a few hundred meters
+        // Distance should be roughly a few tens of meters
         assert!(distance > 0.0);
         assert!(distance < 1000.0); // Less than 1km
     }

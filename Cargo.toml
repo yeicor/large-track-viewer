@@ -14,7 +14,7 @@ repository = "https://github.com/Yeicor/large-track-viewer"
 
 [workspace.dependencies]
 # === UI Framework ===
-eframe = { version = "0.33", default-features = false, features = ["accesskit", "default_fonts", "persistence", "wayland", "web_screen_reader", "wgpu", "x11"] }
+eframe = { version = "0.33", features = ["persistence"] }
 egui = "*" # Use the same version as eframe
 winit = "*" # Use the same version as eframe
 

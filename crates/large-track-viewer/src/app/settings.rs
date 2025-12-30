@@ -10,7 +10,7 @@ pub struct Settings {
     #[clap(short, long, value_name = "FILE")]
     pub gpx_files: Vec<PathBuf>,
 
-    /// LOD bias (higher = more detail, typical range: 0.1-10.0)
+    /// LOD bias (higher = more detail, range: 0.001-1000)
     #[clap(short, long, default_value = "1.0")]
     pub bias: f64,
 
@@ -26,25 +26,17 @@ pub struct Settings {
     #[clap(long, default_value = "1080")]
     pub reference_viewport_height: u32,
 
-    /// Initial map center latitude (WGS84)
-    #[clap(long)]
-    pub center_lat: Option<f64>,
-
-    /// Initial map center longitude (WGS84)
-    #[clap(long)]
-    pub center_lon: Option<f64>,
-
-    /// Initial map zoom level
-    #[clap(long, default_value = "12")]
-    pub zoom: u8,
-
     /// Track line width in pixels
-    #[clap(long, default_value = "2.0")]
+    #[clap(long, default_value = "1.0")]
     pub line_width: f32,
 
-    /// Track color (hex format, e.g., FF0000 for red)
-    #[clap(long, default_value = "0000FF")]
-    pub track_color: String,
+    /// Show outline/border around tracks for better visibility
+    #[clap(long, default_value = "false")]
+    pub show_outline: bool,
+
+    /// Ignore previously persisted state and start fresh
+    #[clap(long, default_value = "false")]
+    pub ignore_persisted: bool,
 }
 
 impl Settings {
@@ -73,25 +65,5 @@ impl Settings {
                 }
             }
         }
-    }
-
-    /// Parse hex color string to RGB
-    pub fn parse_track_color(&self) -> egui::Color32 {
-        if let Ok(rgb) = u32::from_str_radix(&self.track_color, 16) {
-            egui::Color32::from_rgb(
-                ((rgb >> 16) & 0xFF) as u8,
-                ((rgb >> 8) & 0xFF) as u8,
-                (rgb & 0xFF) as u8,
-            )
-        } else {
-            egui::Color32::BLUE // Default fallback
-        }
-    }
-
-    /// Get initial map position if specified
-    #[allow(dead_code)] // Will be used when MapMemory API allows setting initial position
-    pub fn get_initial_position(&self) -> Option<walkers::Position> {
-        self.center_lat
-            .and_then(|lat| self.center_lon.map(|lon| walkers::lat_lon(lat, lon)))
     }
 }

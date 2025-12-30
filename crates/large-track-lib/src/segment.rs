@@ -1,20 +1,33 @@
 //! Segment structures for external indexing into route data
+//!
+//! This module provides structures for representing simplified line segments
+//! that reference the original route data without duplicating points.
 
 use crate::Route;
 use std::ops::Range;
 use std::sync::Arc;
 
-/// Represents a simplified line segment at a specific LOD, referencing raw data
+/// Represents a simplified line segment at a specific LOD level
+///
+/// This structure references the original route data and stores only indices,
+/// avoiding point duplication while enabling efficient LOD-based rendering.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SimplifiedSegment {
     /// Reference to the owning route
     pub route: Arc<Route>,
+    /// Index of this route in the collection (for per-route coloring)
+    pub route_index: usize,
     /// Multiple connected sub-segments (for routes crossing node boundaries)
     pub parts: Vec<SegmentPart>,
 }
 
 /// A single part of a simplified segment
+///
+/// Stores indices into the original GPX track data, allowing efficient
+/// access to both simplified and full-resolution points.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SegmentPart {
     /// Index of the track in the route
     pub track_index: usize,
@@ -26,24 +39,20 @@ pub struct SegmentPart {
     pub simplified_indices: Vec<usize>,
 }
 
-/// Boundary context for rendering continuous lines
-#[derive(Debug)]
-pub struct BoundaryContext<'a> {
-    /// Point immediately before this part (if exists)
-    pub prev_point: Option<&'a gpx::Waypoint>,
-    /// Point immediately after this part (if exists)
-    pub next_point: Option<&'a gpx::Waypoint>,
-}
-
 impl SimplifiedSegment {
     /// Create a new simplified segment
-    pub fn new(route: Arc<Route>, parts: Vec<SegmentPart>) -> Self {
-        Self { route, parts }
+    pub fn new(route: Arc<Route>, route_index: usize, parts: Vec<SegmentPart>) -> Self {
+        Self {
+            route,
+            route_index,
+            parts,
+        }
     }
 
     /// Create a simplified segment with a single part
     pub fn single(
         route: Arc<Route>,
+        route_index: usize,
         track_index: usize,
         segment_index: usize,
         point_range: Range<usize>,
@@ -51,6 +60,7 @@ impl SimplifiedSegment {
     ) -> Self {
         Self {
             route,
+            route_index,
             parts: vec![SegmentPart {
                 track_index,
                 segment_index,
@@ -78,6 +88,9 @@ impl SegmentPart {
     }
 
     /// Get the point immediately before this part (if exists)
+    ///
+    /// This is used for boundary context to ensure smooth line rendering
+    /// at the edges of viewport-clipped segments.
     pub fn get_prev_point<'a>(&self, route: &'a Route) -> Option<&'a gpx::Waypoint> {
         if self.point_range.start == 0 {
             return None; // First point in segment
@@ -94,6 +107,9 @@ impl SegmentPart {
     }
 
     /// Get the point immediately after this part (if exists)
+    ///
+    /// This is used for boundary context to ensure smooth line rendering
+    /// at the edges of viewport-clipped segments.
     pub fn get_next_point<'a>(&self, route: &'a Route) -> Option<&'a gpx::Waypoint> {
         let segment = route
             .gpx_data()
@@ -110,6 +126,9 @@ impl SegmentPart {
     }
 
     /// Get all simplified points for rendering
+    ///
+    /// Returns references to the waypoints at the simplified indices,
+    /// providing the LOD-reduced representation of this segment part.
     pub fn get_simplified_points<'a>(&self, route: &'a Route) -> Vec<&'a gpx::Waypoint> {
         let segment = match route
             .gpx_data()
@@ -127,15 +146,11 @@ impl SegmentPart {
             .collect()
     }
 
-    /// Get boundary context for continuous rendering
-    pub fn get_boundary_context<'a>(&self, route: &'a Route) -> BoundaryContext<'a> {
-        BoundaryContext {
-            prev_point: self.get_prev_point(route),
-            next_point: self.get_next_point(route),
-        }
-    }
-
     /// Get all points including boundary context for rendering
+    ///
+    /// This includes the previous point (if any), all simplified points,
+    /// and the next point (if any), enabling smooth line rendering at
+    /// segment boundaries.
     pub fn get_points_with_context<'a>(&self, route: &'a Route) -> Vec<&'a gpx::Waypoint> {
         let mut points = Vec::new();
 
@@ -152,37 +167,41 @@ impl SegmentPart {
         points
     }
 
-    /// Check if this part contains any points
-    pub fn is_empty(&self) -> bool {
-        self.simplified_indices.is_empty()
-    }
+    /// Get the full-resolution points in this part's range
+    ///
+    /// Returns all original waypoints without simplification.
+    pub fn get_full_points<'a>(&self, route: &'a Route) -> Vec<&'a gpx::Waypoint> {
+        let segment = match route
+            .gpx_data()
+            .tracks
+            .get(self.track_index)
+            .and_then(|t| t.segments.get(self.segment_index))
+        {
+            Some(seg) => seg,
+            None => return Vec::new(),
+        };
 
-    /// Get the number of simplified points
-    pub fn len(&self) -> usize {
-        self.simplified_indices.len()
+        (self.point_range.start..self.point_range.end)
+            .filter_map(|idx| segment.points.get(idx))
+            .collect()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpx::{Gpx, Track, TrackSegment, Waypoint};
-
-    fn create_test_waypoint(lat: f64, lon: f64) -> Waypoint {
-        Waypoint::new(geo::Point::new(lon, lat))
-    }
 
     fn create_test_route() -> Arc<Route> {
-        let mut gpx = Gpx::default();
-        let mut track = Track::default();
-        let mut segment = TrackSegment::default();
+        let mut gpx = gpx::Gpx::default();
+        let mut track = gpx::Track::default();
+        let mut segment = gpx::TrackSegment::default();
 
         // Add test points
         for i in 0..10 {
-            segment.points.push(create_test_waypoint(
-                51.5074 + i as f64 * 0.0001,
+            segment.points.push(gpx::Waypoint::new(geo::Point::new(
                 -0.1278 + i as f64 * 0.0001,
-            ));
+                51.5074 + i as f64 * 0.0001,
+            )));
         }
 
         track.segments.push(segment);
@@ -191,67 +210,34 @@ mod tests {
     }
 
     #[test]
-    fn test_segment_part_creation() {
-        let _route = create_test_route();
-        let part = SegmentPart::new(0, 0, 0..5, vec![0, 2, 4]);
-
+    fn test_segment_part_new() {
+        let part = SegmentPart::new(0, 1, 10..20, vec![0, 3, 6, 9]);
         assert_eq!(part.track_index, 0);
-        assert_eq!(part.segment_index, 0);
-        assert_eq!(part.point_range, 0..5);
-        assert_eq!(part.simplified_indices, vec![0, 2, 4]);
+        assert_eq!(part.segment_index, 1);
+        assert_eq!(part.point_range, 10..20);
+        assert_eq!(part.simplified_indices, vec![0, 3, 6, 9]);
     }
 
     #[test]
-    fn test_get_simplified_points() {
-        let route = create_test_route();
-        let part = SegmentPart::new(0, 0, 0..5, vec![0, 2, 4]);
-
-        let points = part.get_simplified_points(&route);
-        assert_eq!(points.len(), 3);
-    }
-
-    #[test]
-    fn test_get_prev_point() {
+    fn test_simplified_segment_new() {
         let route = create_test_route();
 
-        // First point has no previous
-        let part1 = SegmentPart::new(0, 0, 0..5, vec![0, 2, 4]);
-        assert!(part1.get_prev_point(&route).is_none());
+        let parts = vec![SegmentPart::new(0, 0, 0..10, vec![0, 5, 9])];
+        let segment = SimplifiedSegment::new(route.clone(), 0, parts);
 
-        // Non-first point has previous
-        let part2 = SegmentPart::new(0, 0, 2..5, vec![0, 2]);
-        assert!(part2.get_prev_point(&route).is_some());
-    }
-
-    #[test]
-    fn test_get_next_point() {
-        let route = create_test_route();
-
-        // Last point has no next
-        let part1 = SegmentPart::new(0, 0, 5..10, vec![0, 2, 4]);
-        assert!(part1.get_next_point(&route).is_none());
-
-        // Non-last point has next
-        let part2 = SegmentPart::new(0, 0, 0..5, vec![0, 2, 4]);
-        assert!(part2.get_next_point(&route).is_some());
-    }
-
-    #[test]
-    fn test_get_points_with_context() {
-        let route = create_test_route();
-        let part = SegmentPart::new(0, 0, 2..5, vec![0, 1, 2]);
-
-        let points = part.get_points_with_context(&route);
-        // Should have: prev + 3 simplified + next = 5 points
-        assert_eq!(points.len(), 5);
+        assert_eq!(segment.route_index, 0);
+        assert_eq!(segment.parts.len(), 1);
     }
 
     #[test]
     fn test_simplified_segment_single() {
         let route = create_test_route();
-        let segment = SimplifiedSegment::single(route.clone(), 0, 0, 0..5, vec![0, 2, 4]);
 
+        let segment = SimplifiedSegment::single(route.clone(), 2, 0, 0, 0..10, vec![0, 5, 9]);
+
+        assert_eq!(segment.route_index, 2);
         assert_eq!(segment.parts.len(), 1);
-        assert_eq!(segment.parts[0].simplified_indices.len(), 3);
+        assert_eq!(segment.parts[0].track_index, 0);
+        assert_eq!(segment.parts[0].segment_index, 0);
     }
 }

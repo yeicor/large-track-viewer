@@ -52,7 +52,7 @@ pub fn setup_logging_and_profiling() {
         // Safety: single-threaded at startup
         unsafe {
             // Nicer default logs
-            std::env::set_var("RUST_LOG", "info,wgpu_hal=warn,eframe=warn");
+            std::env::set_var("RUST_LOG", "info,eframe=warn");
         }
     }
 
@@ -372,7 +372,7 @@ fn serve_and_open_trace(trace_path: PathBuf, state: &mut ProfilingState) {
     tracing::info!("Opening Perfetto UI...");
     tracing::info!("URL: {}", url);
 
-    match open::that(&url) {
+    match open::that(url) {
         Ok(_) => {
             tracing::info!("✓ Perfetto UI opened in browser");
             tracing::info!("The trace should load automatically!");

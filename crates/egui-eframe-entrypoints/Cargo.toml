@@ -22,7 +22,6 @@ profiling = ["profiling/profile-with-tracing", "dep:tracing-chrome", "dep:tracin
 eframe.workspace = true
 egui.workspace = true
 winit.workspace = true
-wgpu = "*" # Use the same version as eframe, with all default features enabled (eframe does not disable the backends)
 
 # === Async Runtime ===
 tokio.workspace = true

@@ -19,7 +19,7 @@ profiling = ["egui-eframe-entrypoints/profiling"]
 
 [dependencies]
 # === Local crates ===
-large-track-lib = { path = "../large-track-lib" }
+large-track-lib = { path = "../large-track-lib", features = ["serde"] }
 egui-eframe-entrypoints = { path = "../egui-eframe-entrypoints" }
 
 # === UI Framework ===
@@ -44,6 +44,9 @@ gpx.workspace = true
 
 # === Misc ===
 instant = { version = "0.1", features = ["wasm-bindgen"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rayon = "1.10"
 
 # === Native (desktop & mobile) ===
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

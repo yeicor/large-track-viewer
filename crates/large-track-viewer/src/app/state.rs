@@ -4,7 +4,6 @@
 //! UI settings, and file loading operations.
 
 use crate::app::settings::Settings;
-use egui::Color32;
 use large_track_lib::{Config, RouteCollection};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
@@ -28,19 +27,25 @@ pub struct AppState {
 
     /// Timestamp when the warning was last shown
     pub wheel_warning_shown_at: Option<instant::Instant>,
+
+    /// Whether we need to fit the map to the loaded tracks' bounds
+    pub pending_fit_bounds: bool,
+
+    /// Whether we need to reload routes due to config change
+    pub pending_reload: bool,
 }
 
 /// UI-specific settings that can be adjusted at runtime
 #[derive(Clone)]
 pub struct UiSettings {
-    /// LOD bias (higher = more detail)
-    pub bias: f64,
-
     /// Track line width in pixels
     pub line_width: f32,
 
-    /// Show boundary context debug markers
-    pub show_boundary_debug: bool,
+    /// Show outline/border around tracks
+    pub show_outline: bool,
+
+    /// LOD bias (higher = more detail)
+    pub bias: f64,
 
     /// Map tiles provider
     pub tiles_provider: TilesProvider,
@@ -67,35 +72,24 @@ pub enum SidebarTab {
 pub enum TilesProvider {
     OpenStreetMap,
     OpenTopoMap,
-    CyclOSM,
 }
 
 impl TilesProvider {
-    pub fn url(&self) -> &'static str {
-        match self {
-            Self::OpenStreetMap => "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-            Self::OpenTopoMap => "https://tile.opentopomap.org/{z}/{x}/{y}.png",
-            Self::CyclOSM => "https://tile.thunderforest.com/cycle/{z}/{x}/{y}.png",
-        }
-    }
-
     pub fn attribution(&self) -> &'static str {
         match self {
             Self::OpenStreetMap => "© OpenStreetMap contributors",
             Self::OpenTopoMap => "© OpenTopoMap (CC-BY-SA)",
-            Self::CyclOSM => "© CyclOSM & Thunderforest",
         }
     }
 
     pub fn all() -> &'static [Self] {
-        &[Self::OpenStreetMap, Self::OpenTopoMap, Self::CyclOSM]
+        &[Self::OpenStreetMap, Self::OpenTopoMap]
     }
 
     pub fn name(&self) -> &'static str {
         match self {
             Self::OpenStreetMap => "OpenStreetMap",
             Self::OpenTopoMap => "OpenTopoMap",
-            Self::CyclOSM => "CyclOSM",
         }
     }
 }
@@ -116,6 +110,19 @@ pub struct FileLoader {
 
     /// Show file picker dialog
     pub show_picker: bool,
+
+    /// Results from parallel loading (path, result) - accumulated incrementally
+    #[allow(clippy::type_complexity)]
+    pub parallel_load_results: Arc<RwLock<Vec<(PathBuf, Result<gpx::Gpx, String>)>>>,
+
+    /// Total number of files in current parallel load batch
+    pub parallel_total_files: Arc<RwLock<usize>>,
+
+    /// Number of files parsed (read from disk) in current parallel load batch
+    pub parallel_parsed_files: Arc<RwLock<usize>>,
+
+    /// Number of files added to collection in current parallel load batch
+    pub parallel_added_files: Arc<RwLock<usize>>,
 }
 
 /// Statistics about loaded data
@@ -136,8 +143,8 @@ pub struct Stats {
     /// Number of segments in last query
     pub last_query_segments: usize,
 
-    /// Current viewport bounds (lat/lon)
-    pub viewport_bounds: Option<(f64, f64, f64, f64)>, // (min_lat, min_lon, max_lat, max_lon)
+    /// Number of simplified points in last query (actually rendered)
+    pub last_query_simplified_points: usize,
 }
 
 impl AppState {
@@ -158,9 +165,9 @@ impl AppState {
         let route_collection = Arc::new(RwLock::new(RouteCollection::new(config)));
 
         let ui_settings = UiSettings {
-            bias: settings.bias,
             line_width: settings.line_width,
-            show_boundary_debug: false,
+            show_outline: settings.show_outline,
+            bias: settings.bias,
             tiles_provider: TilesProvider::OpenStreetMap,
             sidebar_open: true,
             active_tab: SidebarTab::Tracks,
@@ -173,6 +180,10 @@ impl AppState {
             errors: Vec::new(),
             loaded_files: Vec::new(),
             show_picker: false,
+            parallel_load_results: Arc::new(RwLock::new(Vec::new())),
+            parallel_total_files: Arc::new(RwLock::new(0)),
+            parallel_parsed_files: Arc::new(RwLock::new(0)),
+            parallel_added_files: Arc::new(RwLock::new(0)),
         };
 
         Self {
@@ -182,10 +193,12 @@ impl AppState {
             stats: Stats::default(),
             show_wheel_warning: false,
             wheel_warning_shown_at: None,
+            pending_fit_bounds: false,
+            pending_reload: false,
         }
     }
 
-    /// Load a GPX file into the collection
+    /// Load a GPX file into the collection (single-threaded, for sequential loading)
     pub fn load_gpx_file(&mut self, path: PathBuf) -> Result<(), String> {
         profiling::scope!("load_gpx_file");
 
@@ -215,6 +228,8 @@ impl AppState {
                     Ok(_) => {
                         self.file_loader.loaded_files.push((path.clone(), gpx));
                         self.update_stats();
+                        // Request auto-zoom to fit new tracks
+                        self.pending_fit_bounds = true;
                         Ok(())
                     }
                     Err(e) => {
@@ -230,8 +245,168 @@ impl AppState {
         }
     }
 
-    /// Process pending file loads
+    /// Start parallel loading of all pending files
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn start_parallel_load(&mut self) {
+        use rayon::prelude::*;
+
+        let files_to_load: Vec<PathBuf> = self.file_loader.pending_files.drain(..).collect();
+        if files_to_load.is_empty() {
+            return;
+        }
+
+        let results = self.file_loader.parallel_load_results.clone();
+        let total_files = self.file_loader.parallel_total_files.clone();
+        let parsed_files = self.file_loader.parallel_parsed_files.clone();
+
+        // Set the totals and reset counters
+        *total_files.write().unwrap() = files_to_load.len();
+        *parsed_files.write().unwrap() = 0;
+        *self.file_loader.parallel_added_files.write().unwrap() = 0;
+
+        // Spawn a thread to do parallel loading
+        std::thread::spawn(move || {
+            // Process files in parallel, updating progress as each completes
+            files_to_load.into_par_iter().for_each(|path| {
+                let result = (|| -> Result<gpx::Gpx, String> {
+                    let file = std::fs::File::open(&path)
+                        .map_err(|e| format!("Failed to open file: {}", e))?;
+                    let reader = std::io::BufReader::new(file);
+                    gpx::read(reader).map_err(|e| format!("Failed to parse GPX: {}", e))
+                })();
+
+                // Add result and increment parsed count
+                results.write().unwrap().push((path, result));
+                *parsed_files.write().unwrap() += 1;
+            });
+
+            // Note: Don't reset total_files here - it's reset when all routes are added
+        });
+    }
+
+    /// Start parallel loading (WASM fallback - sequential)
+    #[cfg(target_arch = "wasm32")]
+    pub fn start_parallel_load(&mut self) {
+        // On WASM, just process one at a time in the main loop
+        // The pending_files will be processed by process_pending_files
+    }
+
+    /// Process results from parallel loading (batch for throughput, but not all at once)
+    /// Returns true if there are more results to process
+    pub fn process_parallel_results(&mut self) -> bool {
+        // Check if we're done (all added)
+        let total = *self.file_loader.parallel_total_files.read().unwrap();
+        let added = *self.file_loader.parallel_added_files.read().unwrap();
+        if total > 0 && added >= total {
+            self.reset_parallel_loading();
+            return false;
+        }
+
+        // Process a batch of results per frame for better throughput
+        const BATCH_SIZE: usize = 1;
+
+        for _ in 0..BATCH_SIZE {
+            // Take one result
+            let result: Option<(PathBuf, Result<gpx::Gpx, String>)> = {
+                let mut results_lock = self.file_loader.parallel_load_results.write().unwrap();
+                if results_lock.is_empty() {
+                    None
+                } else {
+                    Some(results_lock.remove(0))
+                }
+            };
+
+            let Some((path, parse_result)) = result else {
+                break;
+            };
+
+            match parse_result {
+                Ok(gpx) => {
+                    // Add this single route to the collection
+                    let add_result = {
+                        let mut collection = self.route_collection.write().unwrap();
+                        collection.add_route(gpx.clone())
+                    };
+
+                    match add_result {
+                        Ok(_) => {
+                            self.file_loader.loaded_files.push((path, gpx));
+                            *self.file_loader.parallel_added_files.write().unwrap() += 1;
+                            self.update_stats();
+                            self.pending_fit_bounds = true;
+                        }
+                        Err(e) => {
+                            self.file_loader
+                                .errors
+                                .push((path, format!("Failed to add route: {}", e)));
+                        }
+                    }
+                }
+                Err(e) => {
+                    self.file_loader.errors.push((path, e));
+                }
+            }
+        }
+
+        // Return true if there are more results to process
+        !self
+            .file_loader
+            .parallel_load_results
+            .read()
+            .unwrap()
+            .is_empty()
+    }
+
+    /// Check if parallel loading is in progress
+    pub fn is_parallel_loading(&self) -> bool {
+        let total = *self.file_loader.parallel_total_files.read().unwrap();
+        let added = *self.file_loader.parallel_added_files.read().unwrap();
+        total > 0 && added < total
+    }
+
+    /// Reset parallel loading state (called when all routes are added)
+    fn reset_parallel_loading(&mut self) {
+        *self.file_loader.parallel_total_files.write().unwrap() = 0;
+        *self.file_loader.parallel_parsed_files.write().unwrap() = 0;
+        *self.file_loader.parallel_added_files.write().unwrap() = 0;
+    }
+
+    /// Get parallel loading progress (0.0 to 1.0)
+    /// Progress is weighted: 50% for parsing, 50% for adding to collection
+    pub fn parallel_loading_progress(&self) -> f32 {
+        let total = *self.file_loader.parallel_total_files.read().unwrap();
+        let parsed = *self.file_loader.parallel_parsed_files.read().unwrap();
+        let added = *self.file_loader.parallel_added_files.read().unwrap();
+        if total == 0 {
+            0.0
+        } else {
+            // Weight parsing at 50% and adding at 50%
+            let parse_progress = parsed as f32 / total as f32 * 0.5;
+            let add_progress = added as f32 / total as f32 * 0.5;
+            parse_progress + add_progress
+        }
+    }
+
+    /// Get parallel loading status text
+    pub fn parallel_loading_status(&self) -> String {
+        let total = *self.file_loader.parallel_total_files.read().unwrap();
+        let parsed = *self.file_loader.parallel_parsed_files.read().unwrap();
+        let added = *self.file_loader.parallel_added_files.read().unwrap();
+        if parsed < total {
+            format!("parsing {}/{}", parsed, total)
+        } else if added < total {
+            format!("indexing {}/{}", added, total)
+        } else {
+            format!("{}/{} done", added, total)
+        }
+    }
+
+    /// Process pending file loads (one at a time, for incremental loading)
     pub fn process_pending_files(&mut self) {
+        // First check for parallel results
+        self.process_parallel_results();
+
+        // Then process any remaining files one at a time
         if let Some(path) = self.file_loader.pending_files.pop() {
             let _ = self.load_gpx_file(path);
         }
@@ -260,10 +435,16 @@ impl AppState {
 
     /// Rebuild the entire collection from loaded files
     fn rebuild_collection(&mut self) {
+        self.rebuild_collection_with_bias(self.ui_settings.bias);
+    }
+
+    /// Rebuild the collection with a specific bias value
+    fn rebuild_collection_with_bias(&mut self, bias: f64) {
         profiling::scope!("rebuild_collection");
 
-        // Create new collection with same config
-        let config = self.route_collection.read().unwrap().config().clone();
+        // Create new collection with updated bias
+        let old_config = self.route_collection.read().unwrap().config().clone();
+        let config = Config { bias, ..old_config };
         let mut new_collection = RouteCollection::new(config);
 
         // Re-add all routes
@@ -297,12 +478,21 @@ impl AppState {
         self.stats = Stats::default();
     }
 
-    /// Update LOD bias in the collection
+    /// Update LOD bias and trigger reload
     pub fn update_bias(&mut self, new_bias: f64) {
-        self.ui_settings.bias = new_bias;
-        // Note: Bias change requires rebuilding the quadtree
-        // For now, we just update the UI setting
-        // A production implementation would rebuild or support dynamic bias
+        if (self.ui_settings.bias - new_bias).abs() > 0.01 {
+            self.ui_settings.bias = new_bias;
+            self.pending_reload = true;
+        }
+    }
+
+    /// Process pending reload if needed
+    pub fn process_pending_reload(&mut self) {
+        if self.pending_reload {
+            self.pending_reload = false;
+            self.rebuild_collection_with_bias(self.ui_settings.bias);
+            self.update_stats();
+        }
     }
 
     /// Show the mouse wheel zoom warning
@@ -347,47 +537,14 @@ impl AppState {
             0.0
         }
     }
-
-    /// Generate a color for a track based on its index
-    pub fn get_track_color(index: usize) -> Color32 {
-        // Generate distinct colors using HSV color space
-        let hue = (index as f32 * 137.508) % 360.0; // Golden angle for better distribution
-        let saturation = 0.7;
-        let value = 0.9;
-
-        // Convert HSV to RGB
-        let c = value * saturation;
-        let x = c * (1.0 - ((hue / 60.0) % 2.0 - 1.0).abs());
-        let m = value - c;
-
-        let (r, g, b) = if hue < 60.0 {
-            (c, x, 0.0)
-        } else if hue < 120.0 {
-            (x, c, 0.0)
-        } else if hue < 180.0 {
-            (0.0, c, x)
-        } else if hue < 240.0 {
-            (0.0, x, c)
-        } else if hue < 300.0 {
-            (x, 0.0, c)
-        } else {
-            (c, 0.0, x)
-        };
-
-        Color32::from_rgb(
-            ((r + m) * 255.0) as u8,
-            ((g + m) * 255.0) as u8,
-            ((b + m) * 255.0) as u8,
-        )
-    }
 }
 
 impl Default for UiSettings {
     fn default() -> Self {
         Self {
+            line_width: 1.0,
+            show_outline: false,
             bias: 1.0,
-            line_width: 2.0,
-            show_boundary_debug: false,
             tiles_provider: TilesProvider::OpenStreetMap,
             sidebar_open: true,
             active_tab: SidebarTab::Tracks,
@@ -399,16 +556,11 @@ impl Default for UiSettings {
 impl FileLoader {
     /// Check if any files are being processed
     pub fn is_busy(&self) -> bool {
-        self.loading_file.is_some() || !self.pending_files.is_empty()
-    }
-
-    /// Get load progress (0.0 to 1.0)
-    pub fn progress(&self, total_files: usize) -> f32 {
-        if total_files == 0 {
-            return 1.0;
-        }
-        let remaining = self.pending_files.len() + if self.loading_file.is_some() { 1 } else { 0 };
-        1.0 - (remaining as f32 / total_files as f32)
+        let total = *self.parallel_total_files.read().unwrap();
+        let added = *self.parallel_added_files.read().unwrap();
+        self.loading_file.is_some()
+            || !self.pending_files.is_empty()
+            || (total > 0 && added < total)
     }
 }
 
