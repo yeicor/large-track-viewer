@@ -215,8 +215,6 @@ impl LargeTrackViewerApp {
             show_picker: false,
             parallel_load_results: Arc::new(RwLock::new(Vec::new())),
             parallel_total_files: Arc::new(RwLock::new(0)),
-            parallel_parsed_files: Arc::new(RwLock::new(0)),
-            parallel_added_files: Arc::new(RwLock::new(0)),
         };
 
         AppState {
@@ -389,6 +387,7 @@ impl eframe::App for LargeTrackViewerApp {
         // Process parallel load results (one at a time for UI responsiveness)
         let has_more_results = self.state.process_parallel_results();
         if self.state.is_parallel_loading() || has_more_results {
+            // Request immediate repaint to process next result quickly while still yielding to UI
             ctx.request_repaint();
         }
 

@@ -13,14 +13,24 @@ use std::path::Path;
 use std::sync::Arc;
 
 /// Configuration for the route collection
+///
+/// The LOD (Level of Detail) system automatically adjusts simplification based on the
+/// screen size passed to `query_visible()`. This ensures consistent visual quality
+/// across different screen resolutions without needing to reconfigure the collection.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Config {
-    /// Reference pixel viewport used for LOD calculations
+    /// Reference pixel viewport used as a baseline for LOD calculations.
+    /// The actual screen size is passed at query time, and the LOD tolerance
+    /// is scaled based on the ratio of actual screen size to this reference.
+    /// Default: 1024x768
     pub reference_pixel_viewport: Rect<f64>,
-    /// LOD bias factor (default 1.0 = 1 pixel minimum)
+    /// LOD bias factor (default 1.0).
+    /// Higher values retain more detail (lower simplification tolerance).
+    /// Lower values simplify more aggressively for better performance.
+    /// A bias of 1.0 targets approximately 1 pixel minimum feature size.
     pub bias: f64,
-    /// Subdivision threshold for quadtree nodes
+    /// Subdivision threshold for quadtree nodes (currently unused, reserved for future use)
     pub max_points_per_node: usize,
 }
 
@@ -178,32 +188,28 @@ impl RouteCollection {
     /// Returns segments at the appropriate LOD level for the viewport size.
     /// Simplification is performed lazily and cached for efficiency.
     ///
-    /// Uses the reference pixel viewport configured at construction time for LOD calculations.
-    #[inline]
-    pub fn query_visible(&self, geo_viewport: Rect<f64>) -> Vec<SimplifiedSegment> {
-        self.quadtree.query(geo_viewport)
-    }
-
-    /// Query for visible segments with dynamic LOD adjustment based on screen size
-    ///
-    /// The viewport should be in Web Mercator coordinates (EPSG:3857).
-    /// Returns segments at the appropriate LOD level for the viewport size.
-    /// Simplification is performed lazily and cached for efficiency.
-    ///
     /// # Arguments
     /// * `geo_viewport` - The geographic viewport in Web Mercator coordinates
     /// * `screen_size` - Current screen size (width, height) in pixels.
-    ///   The LOD tolerance is adjusted based on the ratio of current screen
-    ///   to the reference viewport, ensuring consistent visual quality across screen sizes.
+    ///   The LOD tolerance is automatically adjusted based on screen size,
+    ///   ensuring consistent visual quality across different screen resolutions.
     ///   A bias of 1.0 will produce similar visual results regardless of screen resolution.
+    ///
+    /// # Example
+    /// ```ignore
+    /// // Query with actual screen dimensions
+    /// let segments = collection.query_visible(viewport, (1920.0, 1080.0));
+    ///
+    /// // For 4K displays, more detail will be preserved automatically
+    /// let segments = collection.query_visible(viewport, (3840.0, 2160.0));
+    /// ```
     #[inline]
-    pub fn query_visible_with_screen_size(
+    pub fn query_visible(
         &self,
         geo_viewport: Rect<f64>,
         screen_size: (f64, f64),
     ) -> Vec<SimplifiedSegment> {
-        self.quadtree
-            .query_with_screen_size(geo_viewport, Some(screen_size))
+        self.quadtree.query(geo_viewport, screen_size)
     }
 
     /// Get total number of routes
@@ -450,7 +456,8 @@ mod tests {
             },
         );
 
-        let segments = collection.query_visible(viewport);
+        let screen_size = (1920.0, 1080.0);
+        let segments = collection.query_visible(viewport, screen_size);
         // Should return at least one segment
         assert!(!segments.is_empty());
     }
@@ -509,7 +516,8 @@ mod tests {
             },
         );
 
-        let segments = collection.query_visible(viewport);
+        let screen_size = (1920.0, 1080.0);
+        let segments = collection.query_visible(viewport, screen_size);
         // Should return no segments for this viewport
         assert!(segments.is_empty());
     }
@@ -554,7 +562,8 @@ mod tests {
             },
         );
 
-        let segments = collection.query_visible(viewport);
+        let screen_size = (1920.0, 1080.0);
+        let segments = collection.query_visible(viewport, screen_size);
         assert!(!segments.is_empty());
     }
 
@@ -654,7 +663,7 @@ mod tests {
     }
 
     #[test]
-    fn test_query_visible_with_screen_size() {
+    fn test_query_visible_different_screen_sizes() {
         let config = Config::default();
         let mut collection = RouteCollection::new(config);
 
@@ -680,16 +689,12 @@ mod tests {
         let small_screen = (800.0, 600.0);
         let large_screen = (3840.0, 2160.0); // 4K
 
-        let results_small = collection.query_visible_with_screen_size(viewport, small_screen);
-        let results_large = collection.query_visible_with_screen_size(viewport, large_screen);
+        let results_small = collection.query_visible(viewport, small_screen);
+        let results_large = collection.query_visible(viewport, large_screen);
 
         // Both should return results
         assert!(!results_small.is_empty());
         assert!(!results_large.is_empty());
-
-        // Regular query should also work
-        let results_default = collection.query_visible(viewport);
-        assert!(!results_default.is_empty());
     }
 
     #[test]
@@ -730,7 +735,8 @@ mod tests {
             },
         );
 
-        let results = collection.query_visible(viewport);
+        let screen_size = (1920.0, 1080.0);
+        let results = collection.query_visible(viewport, screen_size);
         assert!(!results.is_empty());
     }
 
@@ -772,7 +778,8 @@ mod tests {
             },
         );
 
-        let results = collection.query_visible(viewport);
+        let screen_size = (1920.0, 1080.0);
+        let results = collection.query_visible(viewport, screen_size);
         assert!(!results.is_empty());
     }
 

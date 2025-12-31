@@ -184,28 +184,17 @@ impl Quadtree {
     /// Returns segments at the appropriate LOD level for the given viewport size.
     /// Simplification is done lazily and cached, and results are clipped to the viewport.
     ///
-    /// Uses the reference pixel viewport configured at construction time for LOD calculations.
-    #[inline]
-    pub fn query(&self, geo_viewport: Rect<f64>) -> Vec<SimplifiedSegment> {
-        self.query_with_screen_size(geo_viewport, None)
-    }
-
-    /// Query for segments intersecting the viewport with dynamic LOD adjustment
-    ///
-    /// Returns segments at the appropriate LOD level for the given viewport size.
-    /// Simplification is done lazily and cached, and results are clipped to the viewport.
-    ///
     /// # Arguments
     /// * `geo_viewport` - The geographic viewport in Web Mercator coordinates
-    /// * `current_screen_size` - Optional current screen size (width, height) in pixels.
-    ///   If provided, the LOD tolerance is adjusted based on the ratio of current screen
+    /// * `screen_size` - Current screen size (width, height) in pixels.
+    ///   The LOD tolerance is adjusted based on the ratio of current screen
     ///   to the reference viewport, ensuring consistent visual quality across screen sizes.
     ///   A bias of 1.0 will produce similar visual results regardless of screen resolution.
     #[inline]
-    pub fn query_with_screen_size(
+    pub fn query(
         &self,
         geo_viewport: Rect<f64>,
-        current_screen_size: Option<(f64, f64)>,
+        screen_size: (f64, f64),
     ) -> Vec<SimplifiedSegment> {
         let target_level = self.calculate_target_level(geo_viewport);
 
@@ -216,19 +205,16 @@ impl Quadtree {
             self.bias,
         );
 
-        // Adjust tolerance based on actual screen size if provided
+        // Adjust tolerance based on actual screen size
         // This ensures consistent visual quality across different screen resolutions
-        let target_tolerance = if let Some((screen_width, screen_height)) = current_screen_size {
-            let reference_area =
-                self.reference_pixel_viewport.width() * self.reference_pixel_viewport.height();
-            let current_area = screen_width * screen_height;
-            // Scale tolerance: larger screens need lower tolerance (more detail)
-            // Use sqrt because tolerance is linear while area is quadratic
-            let scale = (reference_area / current_area).sqrt();
-            base_tolerance * scale
-        } else {
-            base_tolerance
-        };
+        let (screen_width, screen_height) = screen_size;
+        let reference_area =
+            self.reference_pixel_viewport.width() * self.reference_pixel_viewport.height();
+        let current_area = screen_width * screen_height;
+        // Scale tolerance: larger screens need lower tolerance (more detail)
+        // Use sqrt because tolerance is linear while area is quadratic
+        let scale = (reference_area / current_area).sqrt();
+        let target_tolerance = base_tolerance * scale;
 
         let mut raw_results = Vec::new();
         self.root.query_segments(geo_viewport, &mut raw_results);
@@ -1527,7 +1513,8 @@ mod tests {
                 y: max_full.y(),
             },
         );
-        let segments_full = collection.query_visible(full_viewport);
+        let screen_size = (1920.0, 1080.0);
+        let segments_full = collection.query_visible(full_viewport, screen_size);
         let points_full: usize = segments_full
             .iter()
             .map(|s| {
@@ -1551,7 +1538,7 @@ mod tests {
                 y: max_small.y(),
             },
         );
-        let segments_small = collection.query_visible(small_viewport);
+        let segments_small = collection.query_visible(small_viewport, screen_size);
         let points_small: usize = segments_small
             .iter()
             .map(|s| {
@@ -1685,7 +1672,8 @@ mod tests {
             },
         );
 
-        let segments_small = collection.query_visible(small_viewport);
+        let screen_size = (1920.0, 1080.0);
+        let segments_small = collection.query_visible(small_viewport, screen_size);
 
         // Query the full track extent
         let min_full = wgs84_to_mercator(51.0, -1.0);
@@ -1701,7 +1689,7 @@ mod tests {
             },
         );
 
-        let segments_large = collection.query_visible(large_viewport);
+        let segments_large = collection.query_visible(large_viewport, screen_size);
 
         // The small viewport should have fewer or equal simplified points
         let points_small: usize = segments_small

@@ -19,7 +19,7 @@ pub struct Settings {
     pub max_points_per_node: usize,
 
     /// Reference viewport width in pixels for LOD calculations
-    #[clap(long, default_value = "1920")]
+    #[clap(long, default_value = "1600")]
     pub reference_viewport_width: u32,
 
     /// Reference viewport height in pixels for LOD calculations

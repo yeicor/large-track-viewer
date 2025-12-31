@@ -184,10 +184,12 @@ impl Plugin for TrackPlugin {
             );
 
             // Query visible segments from the collection
+            // Pass screen size for dynamic LOD adjustment
+            let screen_size = (viewport_rect.width() as f64, viewport_rect.height() as f64);
             let segments: Vec<SimplifiedSegment> = {
                 profiling::scope!("query_visible");
                 let collection = self.collection.read().unwrap();
-                collection.query_visible(viewport)
+                collection.query_visible(viewport, screen_size)
             };
 
             // Render all visible segments and count points

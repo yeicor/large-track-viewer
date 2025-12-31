@@ -117,12 +117,6 @@ pub struct FileLoader {
 
     /// Total number of files in current parallel load batch
     pub parallel_total_files: Arc<RwLock<usize>>,
-
-    /// Number of files parsed (read from disk) in current parallel load batch
-    pub parallel_parsed_files: Arc<RwLock<usize>>,
-
-    /// Number of files added to collection in current parallel load batch
-    pub parallel_added_files: Arc<RwLock<usize>>,
 }
 
 /// Statistics about loaded data
@@ -182,8 +176,6 @@ impl AppState {
             show_picker: false,
             parallel_load_results: Arc::new(RwLock::new(Vec::new())),
             parallel_total_files: Arc::new(RwLock::new(0)),
-            parallel_parsed_files: Arc::new(RwLock::new(0)),
-            parallel_added_files: Arc::new(RwLock::new(0)),
         };
 
         Self {
@@ -248,8 +240,6 @@ impl AppState {
     /// Start parallel loading of all pending files
     #[cfg(not(target_arch = "wasm32"))]
     pub fn start_parallel_load(&mut self) {
-        use rayon::prelude::*;
-
         let files_to_load: Vec<PathBuf> = self.file_loader.pending_files.drain(..).collect();
         if files_to_load.is_empty() {
             return;
@@ -257,17 +247,15 @@ impl AppState {
 
         let results = self.file_loader.parallel_load_results.clone();
         let total_files = self.file_loader.parallel_total_files.clone();
-        let parsed_files = self.file_loader.parallel_parsed_files.clone();
 
         // Set the totals and reset counters
         *total_files.write().unwrap() = files_to_load.len();
-        *parsed_files.write().unwrap() = 0;
-        *self.file_loader.parallel_added_files.write().unwrap() = 0;
 
-        // Spawn a thread to do parallel loading
+        // Spawn a dedicated thread that processes files sequentially but yields results incrementally.
+        // This avoids saturating all CPU cores during parsing, keeping UI responsive.
+        // Each file is parsed one at a time and immediately pushed to results for the UI to consume.
         std::thread::spawn(move || {
-            // Process files in parallel, updating progress as each completes
-            files_to_load.into_par_iter().for_each(|path| {
+            for path in files_to_load {
                 let result = (|| -> Result<gpx::Gpx, String> {
                     let file = std::fs::File::open(&path)
                         .map_err(|e| format!("Failed to open file: {}", e))?;
@@ -275,12 +263,12 @@ impl AppState {
                     gpx::read(reader).map_err(|e| format!("Failed to parse GPX: {}", e))
                 })();
 
-                // Add result and increment parsed count
+                // Push result immediately so UI can process it while we parse the next file
                 results.write().unwrap().push((path, result));
-                *parsed_files.write().unwrap() += 1;
-            });
 
-            // Note: Don't reset total_files here - it's reset when all routes are added
+                // Small yield to allow other threads to run (helps UI responsiveness)
+                std::thread::yield_now();
+            }
         });
     }
 
@@ -291,116 +279,103 @@ impl AppState {
         // The pending_files will be processed by process_pending_files
     }
 
-    /// Process results from parallel loading (batch for throughput, but not all at once)
-    /// Returns true if there are more results to process
+    /// Process results from parallel loading incrementally.
+    /// Processes one result per call to keep UI responsive during indexing.
+    /// Returns true if there are more results to process.
     pub fn process_parallel_results(&mut self) -> bool {
         // Check if we're done (all added)
         let total = *self.file_loader.parallel_total_files.read().unwrap();
-        let added = *self.file_loader.parallel_added_files.read().unwrap();
+        let added = self.file_loader.loaded_files.len() + self.file_loader.errors.len();
         if total > 0 && added >= total {
             self.reset_parallel_loading();
             return false;
         }
 
-        // Process a batch of results per frame for better throughput
-        const BATCH_SIZE: usize = 1;
+        // Process exactly one result per frame to keep UI fluid during indexing
+        // Take one result (non-blocking)
+        let result: Option<(PathBuf, Result<gpx::Gpx, String>)> = {
+            let mut results_lock = self.file_loader.parallel_load_results.write().unwrap();
+            if results_lock.is_empty() {
+                None
+            } else {
+                Some(results_lock.remove(0))
+            }
+        };
 
-        for _ in 0..BATCH_SIZE {
-            // Take one result
-            let result: Option<(PathBuf, Result<gpx::Gpx, String>)> = {
-                let mut results_lock = self.file_loader.parallel_load_results.write().unwrap();
-                if results_lock.is_empty() {
-                    None
-                } else {
-                    Some(results_lock.remove(0))
-                }
-            };
+        let Some((path, parse_result)) = result else {
+            // No results ready yet, but we're still loading
+            return self.is_parallel_loading();
+        };
 
-            let Some((path, parse_result)) = result else {
-                break;
-            };
+        match parse_result {
+            Ok(gpx) => {
+                // Add this single route to the collection
+                let add_result = {
+                    let mut collection = self.route_collection.write().unwrap();
+                    collection.add_route(gpx.clone())
+                };
 
-            match parse_result {
-                Ok(gpx) => {
-                    // Add this single route to the collection
-                    let add_result = {
-                        let mut collection = self.route_collection.write().unwrap();
-                        collection.add_route(gpx.clone())
-                    };
-
-                    match add_result {
-                        Ok(_) => {
-                            self.file_loader.loaded_files.push((path, gpx));
-                            self.update_stats();
-                            self.pending_fit_bounds = true;
-                        }
-                        Err(e) => {
-                            self.file_loader
-                                .errors
-                                .push((path, format!("Failed to add route: {}", e)));
-                        }
+                match add_result {
+                    Ok(_) => {
+                        self.file_loader.loaded_files.push((path, gpx));
+                        self.update_stats();
+                        self.pending_fit_bounds = true;
                     }
-                    // Count this file as processed (whether success or error)
-                    *self.file_loader.parallel_added_files.write().unwrap() += 1;
+                    Err(e) => {
+                        self.file_loader
+                            .errors
+                            .push((path, format!("Failed to add route: {}", e)));
+                    }
                 }
-                Err(e) => {
-                    self.file_loader.errors.push((path, e));
-                    // Count parse errors as processed too
-                    *self.file_loader.parallel_added_files.write().unwrap() += 1;
-                }
+                // No need to increment a processed counter; progress is now based on loaded_files + errors.
+            }
+            Err(e) => {
+                self.file_loader.errors.push((path, e));
+                // No need to increment a processed counter; progress is now based on loaded_files + errors.
             }
         }
 
-        // Return true if there are more results to process
+        // Return true if there are more results to process or still loading
         !self
             .file_loader
             .parallel_load_results
             .read()
             .unwrap()
             .is_empty()
+            || self.is_parallel_loading()
     }
 
     /// Check if parallel loading is in progress
     pub fn is_parallel_loading(&self) -> bool {
         let total = *self.file_loader.parallel_total_files.read().unwrap();
-        let added = *self.file_loader.parallel_added_files.read().unwrap();
-        total > 0 && added < total
+        let processed = self.file_loader.loaded_files.len() + self.file_loader.errors.len();
+        total > 0 && processed < total
     }
 
     /// Reset parallel loading state (called when all routes are added)
     fn reset_parallel_loading(&mut self) {
         *self.file_loader.parallel_total_files.write().unwrap() = 0;
-        *self.file_loader.parallel_parsed_files.write().unwrap() = 0;
-        *self.file_loader.parallel_added_files.write().unwrap() = 0;
     }
 
-    /// Get parallel loading progress (0.0 to 1.0)
-    /// Progress is weighted: 50% for parsing, 50% for adding to collection
-    pub fn parallel_loading_progress(&self) -> f32 {
+    /// Get loading progress (0.0 to 1.0)
+    pub fn loading_progress(&self) -> f32 {
         let total = *self.file_loader.parallel_total_files.read().unwrap();
-        let parsed = *self.file_loader.parallel_parsed_files.read().unwrap();
-        let added = *self.file_loader.parallel_added_files.read().unwrap();
+        let processed = self.file_loader.loaded_files.len() + self.file_loader.errors.len();
         if total == 0 {
             0.0
         } else {
-            // Weight parsing at 50% and adding at 50%
-            let parse_progress = parsed as f32 / total as f32 * 0.5;
-            let add_progress = added as f32 / total as f32 * 0.5;
-            parse_progress + add_progress
+            processed as f32 / total as f32
         }
     }
 
-    /// Get parallel loading status text
-    pub fn parallel_loading_status(&self) -> String {
+    /// Get loading status text
+    pub fn loading_status(&self) -> String {
         let total = *self.file_loader.parallel_total_files.read().unwrap();
-        let parsed = *self.file_loader.parallel_parsed_files.read().unwrap();
-        let added = *self.file_loader.parallel_added_files.read().unwrap();
-        if parsed < total {
-            format!("parsing {}/{}", parsed, total)
-        } else if added < total {
-            format!("indexing {}/{}", added, total)
+        let processed = self.file_loader.loaded_files.len() + self.file_loader.errors.len();
+        if processed < total {
+            format!("{}/{}", processed, total)
         } else {
-            format!("{}/{} done", added, total)
+            format!("{}/{} done", processed, total)
         }
     }
 
@@ -560,10 +535,10 @@ impl FileLoader {
     /// Check if any files are being processed
     pub fn is_busy(&self) -> bool {
         let total = *self.parallel_total_files.read().unwrap();
-        let added = *self.parallel_added_files.read().unwrap();
+        let processed = self.loaded_files.len() + self.errors.len();
         self.loading_file.is_some()
             || !self.pending_files.is_empty()
-            || (total > 0 && added < total)
+            || (total > 0 && processed < total)
     }
 }
 

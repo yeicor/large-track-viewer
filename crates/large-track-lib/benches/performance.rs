@@ -9,6 +9,12 @@ use geo::{Coord, Point, Rect};
 use gpx::{Gpx, Track, TrackSegment, Waypoint};
 use large_track_lib::{Config, RouteCollection};
 
+/// Standard screen size for benchmarks (1080p)
+const SCREEN_SIZE: (f64, f64) = (1920.0, 1080.0);
+
+/// 4K screen size for comparison benchmarks
+const SCREEN_SIZE_4K: (f64, f64) = (3840.0, 2160.0);
+
 /// Generate a realistic GPX track with the specified number of points.
 fn generate_gpx_track(num_points: usize, base_lat: f64, base_lon: f64) -> Gpx {
     let mut gpx = Gpx::default();
@@ -84,7 +90,7 @@ fn bench_query_performance(c: &mut Criterion) {
     let small_viewport = create_viewport(51.50, -0.12, 51.55, -0.05);
 
     // Sanity check: ensure query returns results
-    let sanity_results = collection.query_visible(small_viewport);
+    let sanity_results = collection.query_visible(small_viewport, SCREEN_SIZE);
     assert!(
         !sanity_results.is_empty(),
         "Small viewport should return results - got {} segments",
@@ -92,20 +98,14 @@ fn bench_query_performance(c: &mut Criterion) {
     );
 
     group.bench_function("small_viewport_50k", |b| {
-        b.iter(|| collection.query_visible(small_viewport));
-    });
-
-    // Small viewport with dynamic screen size adjustment
-    let screen_size = (1920.0, 1080.0);
-    group.bench_function("small_viewport_50k_dynamic", |b| {
-        b.iter(|| collection.query_visible_with_screen_size(small_viewport, screen_size));
+        b.iter(|| collection.query_visible(small_viewport, SCREEN_SIZE));
     });
 
     // Large viewport (overview)
     let large_viewport = create_viewport(50.0, -2.0, 53.0, 1.0);
 
     // Sanity check
-    let sanity_results = collection.query_visible(large_viewport);
+    let sanity_results = collection.query_visible(large_viewport, SCREEN_SIZE);
     assert!(
         !sanity_results.is_empty(),
         "Large viewport should return results - got {} segments",
@@ -113,13 +113,12 @@ fn bench_query_performance(c: &mut Criterion) {
     );
 
     group.bench_function("large_viewport_50k", |b| {
-        b.iter(|| collection.query_visible(large_viewport));
+        b.iter(|| collection.query_visible(large_viewport, SCREEN_SIZE));
     });
 
-    // Large viewport with dynamic screen size (4K display)
-    let screen_size_4k = (3840.0, 2160.0);
+    // Large viewport with 4K screen (more detail)
     group.bench_function("large_viewport_50k_4k", |b| {
-        b.iter(|| collection.query_visible_with_screen_size(large_viewport, screen_size_4k));
+        b.iter(|| collection.query_visible(large_viewport, SCREEN_SIZE_4K));
     });
 
     group.finish();
@@ -140,7 +139,7 @@ fn bench_many_routes(c: &mut Criterion) {
 
     group.throughput(Throughput::Elements(total_points as u64));
     group.bench_function("100_routes_1k_each", |b| {
-        b.iter(|| collection.query_visible(viewport));
+        b.iter(|| collection.query_visible(viewport, SCREEN_SIZE));
     });
 
     group.finish();
