@@ -226,12 +226,12 @@ async function initNativeAppBanner() {
 // Wait for TrunkApplicationStarted before doing anything else
 function onTrunkStarted(event) {
   // Import the WASM JS glue code (Trunk will generate this)
-  const WebHandle = window.wasmBindings.WebHandle;
+  const get_web_handle = window.wasmBindings.get_web_handle;
 
   async function main() {
     try {
       // Set up the Rust WebHandle
-      const handle = WebHandle.new();
+      const handle = get_web_handle();
 
       // Get the canvas element
       const canvas = document.getElementById("the_canvas_id");

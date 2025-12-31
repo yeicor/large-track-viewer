@@ -40,8 +40,6 @@ pub use metadata::{log_version_info, short_version_info};
 
 #[cfg(target_arch = "wasm32")]
 pub mod web;
-#[cfg(target_arch = "wasm32")]
-pub use web::WebHandle;
 
 // Re-export eframe types commonly needed for app creation
 pub use eframe;
@@ -102,13 +100,14 @@ macro_rules! eframe_app_lib {
         // Web (WASM) entry point
         // ==========================================
         #[cfg(target_arch = "wasm32")]
-        #[unsafe(no_mangle)] // SAFETY: there is no other global function of this name
-        pub fn create_egui_app(
-            cc: &$crate::eframe::CreationContext<'_>,
-        ) -> Box<dyn $crate::eframe::App> {
-            let creator: fn(&$crate::eframe::CreationContext<'_>) -> Box<dyn $crate::eframe::App> =
-                $app_creator;
-            creator(cc)
+        #[wasm_bindgen::prelude::wasm_bindgen]
+        pub fn do_set_app_creator() {
+            let rt = ::tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("Failed to create Tokio runtime");
+            $crate::web::set_runtime(rt.handle().clone());
+            $crate::web::set_app_creator($app_creator);
         }
 
         // ==========================================
@@ -150,7 +149,13 @@ macro_rules! eframe_app_main {
     () => {
         fn main() {
             #[cfg(not(target_arch = "wasm32"))]
-            large_track_viewer::run_native();
+            $crate::run_native();
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        #[wasm_bindgen::prelude::wasm_bindgen(start)]
+        fn main_web() {
+            large_track_viewer::do_set_app_creator();
         }
     };
 }

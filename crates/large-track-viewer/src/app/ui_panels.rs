@@ -552,14 +552,16 @@ pub fn handle_drag_and_drop(ctx: &egui::Context, state: &mut AppState) {
     // Handle dropped files outside of ctx.input
     let mut files_dropped = false;
     for dropped_file in dropped_files {
-        if dropped_file
+        let is_gpx = dropped_file
             .path
             .as_ref()
-            .unwrap()
-            .extension()
-            .map(|e| e == "gpx")
-            .unwrap_or(false)
-        {
+            .map(|p| p.extension())
+            .unwrap_or_else(|| std::path::Path::new(&dropped_file.name).extension())
+            .and_then(|e| e.to_str())
+            .map(|s| s.eq_ignore_ascii_case("gpx"))
+            .unwrap_or(false);
+
+        if is_gpx {
             state.queue_file(dropped_file.clone());
             files_dropped = true;
         }

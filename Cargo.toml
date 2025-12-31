@@ -33,5 +33,6 @@ gpx = "0.10"
 geo = "0.31"
 
 # === Web ===
+wasm-bindgen = "0.2"
 web-sys = "0.3"
 futures = "0.3"

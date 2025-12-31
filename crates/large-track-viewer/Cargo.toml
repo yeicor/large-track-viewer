@@ -54,7 +54,7 @@ rfd = "0.15"
 
 # === Web ===
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen-futures = "0.4"
+wasm-bindgen.workspace = true
 web-sys.workspace = true
 tracing-wasm = "0.2"
 console_error_panic_hook = "0.1"
