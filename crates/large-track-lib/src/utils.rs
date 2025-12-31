@@ -10,6 +10,18 @@ pub const EARTH_SIZE_METERS: f64 = EARTH_MERCATOR_MAX - EARTH_MERCATOR_MIN;
 /// Maximum latitude that can be represented in Web Mercator
 pub const MAX_LATITUDE: f64 = 85.05112878;
 
+/// Precomputed constant: EARTH_MERCATOR_MAX / 180.0
+const LON_TO_X_FACTOR: f64 = EARTH_MERCATOR_MAX / 180.0;
+
+/// Precomputed constant: EARTH_MERCATOR_MAX / PI
+const Y_FACTOR: f64 = EARTH_MERCATOR_MAX / std::f64::consts::PI;
+
+/// Precomputed constant: 180.0 / EARTH_MERCATOR_MAX
+const X_TO_LON_FACTOR: f64 = 180.0 / EARTH_MERCATOR_MAX;
+
+/// Precomputed constant: PI / EARTH_MERCATOR_MAX
+const Y_TO_LAT_FACTOR: f64 = std::f64::consts::PI / EARTH_MERCATOR_MAX;
+
 /// Convert WGS84 (lat, lon) to Web Mercator (x, y) in meters
 ///
 /// # Arguments
@@ -18,14 +30,28 @@ pub const MAX_LATITUDE: f64 = 85.05112878;
 ///
 /// # Returns
 /// A `Point<f64>` with x (easting) and y (northing) in meters
+#[inline(always)]
 pub fn wgs84_to_mercator(lat: f64, lon: f64) -> Point<f64> {
     // Clamp latitude to valid Web Mercator range
     let lat = lat.clamp(-MAX_LATITUDE, MAX_LATITUDE);
 
-    let x = lon * EARTH_MERCATOR_MAX / 180.0;
-    let y = (lat.to_radians().tan() + (1.0 / lat.to_radians().cos())).ln() * EARTH_MERCATOR_MAX
-        / std::f64::consts::PI;
+    let x = lon * LON_TO_X_FACTOR;
 
+    // Optimized: compute lat_rad once
+    let lat_rad = lat.to_radians();
+    let y = (lat_rad.tan() + (1.0 / lat_rad.cos())).ln() * Y_FACTOR;
+
+    Point::new(x, y)
+}
+
+/// Convert WGS84 to Web Mercator without clamping (for trusted input)
+///
+/// Use this when you know the latitude is already within valid bounds.
+#[inline(always)]
+pub fn wgs84_to_mercator_unclamped(lat: f64, lon: f64) -> Point<f64> {
+    let x = lon * LON_TO_X_FACTOR;
+    let lat_rad = lat.to_radians();
+    let y = (lat_rad.tan() + (1.0 / lat_rad.cos())).ln() * Y_FACTOR;
     Point::new(x, y)
 }
 
@@ -37,26 +63,29 @@ pub fn wgs84_to_mercator(lat: f64, lon: f64) -> Point<f64> {
 ///
 /// # Returns
 /// A tuple of (latitude, longitude) in degrees
+#[inline(always)]
 pub fn mercator_to_wgs84(x: f64, y: f64) -> (f64, f64) {
-    let lon = (x / EARTH_MERCATOR_MAX) * 180.0;
-    let lat = (std::f64::consts::PI / 2.0
-        - 2.0 * ((-y / EARTH_MERCATOR_MAX * std::f64::consts::PI).exp()).atan())
-    .to_degrees();
-
+    let lon = x * X_TO_LON_FACTOR;
+    let lat =
+        (std::f64::consts::PI / 2.0 - 2.0 * ((-y * Y_TO_LAT_FACTOR).exp()).atan()).to_degrees();
     (lat, lon)
 }
 
 /// Convert a GPX waypoint to Web Mercator point
+#[inline(always)]
 pub fn waypoint_to_mercator(waypoint: &gpx::Waypoint) -> Point<f64> {
     wgs84_to_mercator(waypoint.point().y(), waypoint.point().x())
 }
 
 /// Check if a point is within Web Mercator bounds
+#[inline(always)]
 pub fn is_valid_mercator(point: &Point<f64>) -> bool {
-    point.x() >= EARTH_MERCATOR_MIN
-        && point.x() <= EARTH_MERCATOR_MAX
-        && point.y() >= EARTH_MERCATOR_MIN
-        && point.y() <= EARTH_MERCATOR_MAX
+    let x = point.x();
+    let y = point.y();
+    x >= EARTH_MERCATOR_MIN
+        && x <= EARTH_MERCATOR_MAX
+        && y >= EARTH_MERCATOR_MIN
+        && y <= EARTH_MERCATOR_MAX
 }
 
 #[cfg(test)]
@@ -102,5 +131,15 @@ mod tests {
             EARTH_MERCATOR_MAX + 1.0,
             0.0
         )));
+    }
+
+    #[test]
+    fn test_unclamped_matches_clamped_for_valid_input() {
+        let lat = 45.0;
+        let lon = -90.0;
+        let clamped = wgs84_to_mercator(lat, lon);
+        let unclamped = wgs84_to_mercator_unclamped(lat, lon);
+        assert!((clamped.x() - unclamped.x()).abs() < f64::EPSILON);
+        assert!((clamped.y() - unclamped.y()).abs() < f64::EPSILON);
     }
 }

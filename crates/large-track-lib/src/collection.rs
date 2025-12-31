@@ -52,6 +52,20 @@ pub struct CollectionInfo {
     pub total_distance_meters: f64,
 }
 
+/// Cached statistics for the collection
+///
+/// These are updated incrementally when routes are added or removed,
+/// avoiding expensive recalculation.
+#[derive(Debug, Clone, Default)]
+struct CachedStats {
+    /// Total number of points across all routes
+    total_points: usize,
+    /// Total distance in meters across all routes
+    total_distance: f64,
+    /// Cached bounding box in Web Mercator (None if empty)
+    bounding_box_mercator: Option<Rect<f64>>,
+}
+
 /// Top-level manager for all routes and queries
 #[derive(Clone)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -62,6 +76,9 @@ pub struct RouteCollection {
     quadtree: Quadtree,
     /// Configuration settings
     config: Config,
+    /// Cached statistics (incrementally updated)
+    #[cfg_attr(feature = "serde", serde(skip, default))]
+    cached_stats: CachedStats,
 }
 
 impl RouteCollection {
@@ -72,6 +89,7 @@ impl RouteCollection {
             routes: Vec::new(),
             quadtree,
             config,
+            cached_stats: CachedStats::default(),
         }
     }
 
@@ -93,6 +111,9 @@ impl RouteCollection {
 
         // Merge into main quadtree
         self.quadtree.merge(route_quadtree)?;
+
+        // Update cached statistics incrementally
+        self.update_stats_for_added_route(&route);
 
         // Store route reference
         self.routes.push(route);
@@ -129,6 +150,8 @@ impl RouteCollection {
         // Sequential merge (fast due to structural alignment)
         for (route, quadtree) in route_quadtrees {
             self.quadtree.merge(quadtree)?;
+            // Update cached statistics incrementally
+            self.update_stats_for_added_route(&route);
             self.routes.push(route);
         }
 
@@ -154,50 +177,65 @@ impl RouteCollection {
     /// The viewport should be in Web Mercator coordinates (EPSG:3857).
     /// Returns segments at the appropriate LOD level for the viewport size.
     /// Simplification is performed lazily and cached for efficiency.
+    #[inline]
     pub fn query_visible(&self, geo_viewport: Rect<f64>) -> Vec<SimplifiedSegment> {
         self.quadtree.query(geo_viewport)
     }
 
     /// Get total number of routes
+    #[inline]
     pub fn route_count(&self) -> usize {
         self.routes.len()
     }
 
     /// Get total number of points across all routes
+    ///
+    /// This is O(1) as the value is cached and updated incrementally.
+    #[inline]
     pub fn total_points(&self) -> usize {
-        self.routes.iter().map(|r| r.total_points()).sum()
+        self.cached_stats.total_points
     }
 
     /// Get total distance across all routes in meters
+    ///
+    /// This is O(1) as the value is cached and updated incrementally.
+    #[inline]
     pub fn total_distance(&self) -> f64 {
-        self.routes.iter().map(|r| r.total_distance()).sum()
+        self.cached_stats.total_distance
     }
 
     /// Get collection information
+    ///
+    /// This is O(1) as all values are cached.
+    #[inline]
     pub fn get_info(&self) -> CollectionInfo {
         CollectionInfo {
-            route_count: self.route_count(),
-            total_points: self.total_points(),
-            total_distance_meters: self.total_distance(),
+            route_count: self.routes.len(),
+            total_points: self.cached_stats.total_points,
+            total_distance_meters: self.cached_stats.total_distance,
         }
     }
 
     /// Get a reference to the configuration
+    #[inline]
     pub fn config(&self) -> &Config {
         &self.config
     }
 
     /// Get a reference to a specific route by index
+    #[inline]
     pub fn get_route(&self, index: usize) -> Option<&Arc<Route>> {
         self.routes.get(index)
     }
 
     /// Get all routes
+    #[inline]
     pub fn routes(&self) -> &[Arc<Route>] {
         &self.routes
     }
 
     /// Check if the collection is empty
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.routes.is_empty()
     }
@@ -206,33 +244,20 @@ impl RouteCollection {
     pub fn clear(&mut self) {
         self.routes.clear();
         self.quadtree = Quadtree::new(self.config.reference_pixel_viewport, self.config.bias);
+        self.cached_stats = CachedStats::default();
     }
 
     /// Get the combined bounding box of all routes in WGS84 coordinates (lat/lon)
     ///
+    /// This is O(1) as the bounding box is cached and updated incrementally.
     /// Returns `None` if there are no routes loaded.
     /// Returns `Some((min_lat, min_lon, max_lat, max_lon))` otherwise.
     pub fn bounding_box_wgs84(&self) -> Option<(f64, f64, f64, f64)> {
-        if self.routes.is_empty() {
-            return None;
-        }
-
-        let mut min_x = f64::INFINITY;
-        let mut min_y = f64::INFINITY;
-        let mut max_x = f64::NEG_INFINITY;
-        let mut max_y = f64::NEG_INFINITY;
-
-        for route in &self.routes {
-            let bbox = route.bounding_box();
-            min_x = min_x.min(bbox.min().x);
-            min_y = min_y.min(bbox.min().y);
-            max_x = max_x.max(bbox.max().x);
-            max_y = max_y.max(bbox.max().y);
-        }
+        let bbox = self.cached_stats.bounding_box_mercator?;
 
         // Convert from Web Mercator back to WGS84
-        let (min_lat, min_lon) = utils::mercator_to_wgs84(min_x, min_y);
-        let (max_lat, max_lon) = utils::mercator_to_wgs84(max_x, max_y);
+        let (min_lat, min_lon) = utils::mercator_to_wgs84(bbox.min().x, bbox.min().y);
+        let (max_lat, max_lon) = utils::mercator_to_wgs84(bbox.max().x, bbox.max().y);
 
         Some((min_lat, min_lon, max_lat, max_lon))
     }
@@ -241,11 +266,84 @@ impl RouteCollection {
     ///
     /// Returns `None` if there are no routes loaded.
     /// Returns `Some((lat, lon))` otherwise.
+    #[inline]
     pub fn center_wgs84(&self) -> Option<(f64, f64)> {
         self.bounding_box_wgs84()
             .map(|(min_lat, min_lon, max_lat, max_lon)| {
                 ((min_lat + max_lat) / 2.0, (min_lon + max_lon) / 2.0)
             })
+    }
+
+    /// Update cached statistics when a route is added
+    #[inline]
+    fn update_stats_for_added_route(&mut self, route: &Route) {
+        // Update point count
+        self.cached_stats.total_points += route.total_points();
+
+        // Update total distance
+        self.cached_stats.total_distance += route.total_distance();
+
+        // Update bounding box
+        let route_bbox = route.bounding_box();
+        match &mut self.cached_stats.bounding_box_mercator {
+            Some(bbox) => {
+                // Expand existing bounding box
+                let new_min_x = bbox.min().x.min(route_bbox.min().x);
+                let new_min_y = bbox.min().y.min(route_bbox.min().y);
+                let new_max_x = bbox.max().x.max(route_bbox.max().x);
+                let new_max_y = bbox.max().y.max(route_bbox.max().y);
+                *bbox = Rect::new(
+                    geo::Coord {
+                        x: new_min_x,
+                        y: new_min_y,
+                    },
+                    geo::Coord {
+                        x: new_max_x,
+                        y: new_max_y,
+                    },
+                );
+            }
+            None => {
+                // First route, just use its bounding box
+                self.cached_stats.bounding_box_mercator = Some(route_bbox);
+            }
+        }
+    }
+
+    /// Rebuild cached statistics from scratch
+    ///
+    /// This is useful after deserialization or if the cache becomes invalid.
+    #[allow(dead_code)]
+    fn rebuild_cached_stats(&mut self) {
+        self.cached_stats = CachedStats::default();
+
+        for route in &self.routes {
+            self.cached_stats.total_points += route.total_points();
+            self.cached_stats.total_distance += route.total_distance();
+
+            let route_bbox = route.bounding_box();
+            match &mut self.cached_stats.bounding_box_mercator {
+                Some(bbox) => {
+                    let new_min_x = bbox.min().x.min(route_bbox.min().x);
+                    let new_min_y = bbox.min().y.min(route_bbox.min().y);
+                    let new_max_x = bbox.max().x.max(route_bbox.max().x);
+                    let new_max_y = bbox.max().y.max(route_bbox.max().y);
+                    *bbox = Rect::new(
+                        geo::Coord {
+                            x: new_min_x,
+                            y: new_min_y,
+                        },
+                        geo::Coord {
+                            x: new_max_x,
+                            y: new_max_y,
+                        },
+                    );
+                }
+                None => {
+                    self.cached_stats.bounding_box_mercator = Some(route_bbox);
+                }
+            }
+        }
     }
 }
 
@@ -474,6 +572,8 @@ mod tests {
         collection.clear();
         assert_eq!(collection.route_count(), 0);
         assert!(collection.is_empty());
+        assert_eq!(collection.total_points(), 0);
+        assert_eq!(collection.total_distance(), 0.0);
     }
 
     #[test]
@@ -527,5 +627,59 @@ mod tests {
         // Center should be around London
         assert!(lat > 51.0 && lat < 52.0);
         assert!(lon > -1.0 && lon < 1.0);
+    }
+
+    #[test]
+    fn test_cached_stats_consistency() {
+        let config = Config::default();
+        let mut collection = RouteCollection::new(config);
+
+        // Add multiple routes
+        for _ in 0..5 {
+            let gpx = create_test_gpx();
+            collection.add_route(gpx).unwrap();
+        }
+
+        // Verify cached stats match expected values
+        assert_eq!(collection.total_points(), 500);
+
+        // Clear and verify stats reset
+        collection.clear();
+        assert_eq!(collection.total_points(), 0);
+        assert_eq!(collection.total_distance(), 0.0);
+        assert!(collection.bounding_box_wgs84().is_none());
+    }
+
+    #[test]
+    fn test_incremental_bounding_box() {
+        let config = Config::default();
+        let mut collection = RouteCollection::new(config);
+
+        // Add first route
+        let gpx1 = create_test_gpx();
+        collection.add_route(gpx1).unwrap();
+
+        let bbox1 = collection.bounding_box_wgs84().unwrap();
+
+        // Add second route in a different area
+        let mut gpx2 = Gpx::default();
+        let mut track = Track::default();
+        let mut segment = TrackSegment::default();
+        for i in 0..100 {
+            segment.points.push(create_test_waypoint(
+                52.5 + i as f64 * 0.001, // Different latitude
+                0.1 + i as f64 * 0.001,  // Different longitude
+            ));
+        }
+        track.segments.push(segment);
+        gpx2.tracks.push(track);
+        collection.add_route(gpx2).unwrap();
+
+        let bbox2 = collection.bounding_box_wgs84().unwrap();
+
+        // Combined bounding box should be larger
+        assert!(
+            bbox2.0 <= bbox1.0 || bbox2.1 <= bbox1.1 || bbox2.2 >= bbox1.2 || bbox2.3 >= bbox1.3
+        );
     }
 }

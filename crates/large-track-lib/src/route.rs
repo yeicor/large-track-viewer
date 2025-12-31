@@ -15,6 +15,10 @@ pub struct Route {
     gpx_data: gpx::Gpx,
     /// Precomputed bounding box in Web Mercator meters
     bounding_box_mercator: Rect<f64>,
+    /// Cached total number of points (computed once during construction)
+    cached_total_points: usize,
+    /// Cached total distance in meters (computed once during construction)
+    cached_total_distance: f64,
 }
 
 impl Route {
@@ -26,39 +30,44 @@ impl Route {
     /// # Returns
     /// An `Arc<Route>` on success, or an error if the route is empty or invalid
     pub fn new(gpx_data: gpx::Gpx) -> Result<Arc<Self>> {
-        // Validate that the route has at least one point
-        let has_points = gpx_data.tracks.iter().any(|track| {
-            track
-                .segments
-                .iter()
-                .any(|segment| !segment.points.is_empty())
-        });
+        // Compute all metadata in a single pass
+        let (bounding_box_mercator, total_points, total_distance) =
+            Self::compute_metadata(&gpx_data)?;
 
-        if !has_points {
+        if total_points == 0 {
             return Err(DataError::EmptyRoute);
         }
-
-        // Compute bounding box from all points
-        let bounding_box_mercator = Self::compute_bounding_box(&gpx_data)?;
 
         Ok(Arc::new(Route {
             gpx_data,
             bounding_box_mercator,
+            cached_total_points: total_points,
+            cached_total_distance: total_distance,
         }))
     }
 
-    /// Compute the bounding box for all points in the GPX data
-    fn compute_bounding_box(gpx: &gpx::Gpx) -> Result<Rect<f64>> {
+    /// Compute all metadata in a single pass over the data
+    ///
+    /// Returns (bounding_box, total_points, total_distance)
+    fn compute_metadata(gpx: &gpx::Gpx) -> Result<(Rect<f64>, usize, f64)> {
         let mut min_x = f64::INFINITY;
         let mut min_y = f64::INFINITY;
         let mut max_x = f64::NEG_INFINITY;
         let mut max_y = f64::NEG_INFINITY;
 
-        let mut found_point = false;
+        let mut total_points: usize = 0;
+        let mut total_distance: f64 = 0.0;
+        let mut found_valid_point = false;
 
         for track in &gpx.tracks {
             for segment in &track.segments {
-                for waypoint in &segment.points {
+                let points = &segment.points;
+                let segment_len = points.len();
+                total_points += segment_len;
+
+                let mut prev_waypoint: Option<&gpx::Waypoint> = None;
+
+                for waypoint in points {
                     let point = utils::waypoint_to_mercator(waypoint);
 
                     if !utils::is_valid_mercator(&point) {
@@ -67,46 +76,60 @@ impl Route {
                             waypoint.point().y(),
                             waypoint.point().x()
                         );
+                        prev_waypoint = None; // Break distance chain
                         continue;
                     }
 
+                    // Update bounding box
                     min_x = min_x.min(point.x());
                     min_y = min_y.min(point.y());
                     max_x = max_x.max(point.x());
                     max_y = max_y.max(point.y());
-                    found_point = true;
+                    found_valid_point = true;
+
+                    // Compute distance from previous point
+                    if let Some(prev) = prev_waypoint {
+                        total_distance += Self::haversine_distance(prev, waypoint);
+                    }
+                    prev_waypoint = Some(waypoint);
                 }
             }
         }
 
-        if !found_point {
+        if !found_valid_point {
             return Err(DataError::InvalidGeometry(
                 "No valid points in route".to_string(),
             ));
         }
 
-        Ok(Rect::new(
+        let bounding_box = Rect::new(
             geo::Coord { x: min_x, y: min_y },
             geo::Coord { x: max_x, y: max_y },
-        ))
+        );
+
+        Ok((bounding_box, total_points, total_distance))
     }
 
     /// Get the bounding box in Web Mercator meters
+    #[inline]
     pub fn bounding_box(&self) -> Rect<f64> {
         self.bounding_box_mercator
     }
 
     /// Access the raw GPX data
+    #[inline]
     pub fn gpx_data(&self) -> &gpx::Gpx {
         &self.gpx_data
     }
 
     /// Get all tracks
+    #[inline]
     pub fn tracks(&self) -> &[gpx::Track] {
         &self.gpx_data.tracks
     }
 
     /// Get a specific waypoint by track, segment, and point indices
+    #[inline]
     pub fn get_waypoint(
         &self,
         track_index: usize,
@@ -123,39 +146,24 @@ impl Route {
     }
 
     /// Get total number of points across all tracks and segments
+    ///
+    /// This is O(1) as the value is cached during construction.
+    #[inline]
     pub fn total_points(&self) -> usize {
-        self.gpx_data
-            .tracks
-            .iter()
-            .map(|track| {
-                track
-                    .segments
-                    .iter()
-                    .map(|segment| segment.points.len())
-                    .sum::<usize>()
-            })
-            .sum()
+        self.cached_total_points
     }
 
     /// Calculate total distance across all tracks and segments in meters
     ///
+    /// This is O(1) as the value is cached during construction.
     /// Uses the Haversine formula for accurate distance calculation on a sphere.
+    #[inline]
     pub fn total_distance(&self) -> f64 {
-        let mut total = 0.0;
-
-        for track in &self.gpx_data.tracks {
-            for segment in &track.segments {
-                let points = &segment.points;
-                for i in 0..points.len().saturating_sub(1) {
-                    total += Self::haversine_distance(&points[i], &points[i + 1]);
-                }
-            }
-        }
-
-        total
+        self.cached_total_distance
     }
 
     /// Calculate the Haversine distance between two waypoints in meters
+    #[inline]
     fn haversine_distance(p1: &gpx::Waypoint, p2: &gpx::Waypoint) -> f64 {
         let point1 = p1.point();
         let point2 = p2.point();
@@ -247,5 +255,20 @@ mod tests {
         // Distance should be roughly a few tens of meters
         assert!(distance > 0.0);
         assert!(distance < 1000.0); // Less than 1km
+    }
+
+    #[test]
+    fn test_cached_values_are_consistent() {
+        let gpx = create_test_gpx();
+        let route = Route::new(gpx).unwrap();
+
+        // Call multiple times to ensure cached values are returned
+        let points1 = route.total_points();
+        let points2 = route.total_points();
+        assert_eq!(points1, points2);
+
+        let dist1 = route.total_distance();
+        let dist2 = route.total_distance();
+        assert!((dist1 - dist2).abs() < f64::EPSILON);
     }
 }

@@ -5,9 +5,11 @@
 //! level and generates simplified versions lazily on-demand.
 
 use crate::{DataError, Result, Route, SegmentPart, SimplifiedSegment, utils};
+use dashmap::DashMap;
 use geo::{Coord, LineString, Point, Rect, SimplifyVwIdx};
-use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use rayon::prelude::*;
+use smallvec::SmallVec;
+use std::sync::Arc;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -62,17 +64,18 @@ pub struct Quadtree {
     /// LOD bias factor (higher = more detail retained)
     bias: f64,
     /// Cache for simplified segments (shared across all queries)
+    /// Uses DashMap for lock-free concurrent access
     /// This is rebuilt at runtime, not serialized
     #[cfg_attr(
         feature = "serde",
         serde(skip, default = "default_simplification_cache")
     )]
-    simplification_cache: Arc<RwLock<HashMap<SimplificationCacheKey, Arc<Vec<usize>>>>>,
+    simplification_cache: Arc<DashMap<SimplificationCacheKey, Arc<Vec<usize>>>>,
 }
 
 #[cfg(feature = "serde")]
-fn default_simplification_cache() -> Arc<RwLock<HashMap<SimplificationCacheKey, Arc<Vec<usize>>>>> {
-    Arc::new(RwLock::new(HashMap::new()))
+fn default_simplification_cache() -> Arc<DashMap<SimplificationCacheKey, Arc<Vec<usize>>>> {
+    Arc::new(DashMap::new())
 }
 
 /// A single node in the LOD quadtree
@@ -100,7 +103,7 @@ impl Quadtree {
             root: QuadtreeNode::new_root(reference_pixel_viewport, bias),
             reference_pixel_viewport,
             bias,
-            simplification_cache: Arc::new(RwLock::new(HashMap::new())),
+            simplification_cache: Arc::new(DashMap::new()),
         }
     }
 
@@ -174,6 +177,7 @@ impl Quadtree {
     ///
     /// Returns segments at the appropriate LOD level for the given viewport size.
     /// Simplification is done lazily and cached, and results are clipped to the viewport.
+    #[inline]
     pub fn query(&self, geo_viewport: Rect<f64>) -> Vec<SimplifiedSegment> {
         let target_level = self.calculate_target_level(geo_viewport);
         let target_tolerance = QuadtreeNode::calculate_pixel_tolerance(
@@ -185,39 +189,52 @@ impl Quadtree {
         let mut raw_results = Vec::new();
         self.root.query_segments(geo_viewport, &mut raw_results);
 
-        // Convert raw segments to simplified segments with lazy caching
-        // and clip to viewport
-        let mut results = Vec::with_capacity(raw_results.len());
+        // Use parallel processing for large result sets
+        // Higher threshold to avoid overhead for small queries
+        const PARALLEL_THRESHOLD: usize = 32;
 
-        for raw in raw_results {
-            let simplified = self.get_or_create_simplified_clipped(
-                raw,
-                target_tolerance,
-                target_level,
-                geo_viewport,
-            );
-            if !simplified.parts.is_empty()
-                && simplified
-                    .parts
-                    .iter()
-                    .any(|p| !p.simplified_indices.is_empty())
-            {
-                results.push(simplified);
+        if raw_results.len() >= PARALLEL_THRESHOLD {
+            // Parallel processing for large result sets
+            raw_results
+                .par_iter()
+                .filter_map(|raw| {
+                    self.get_or_create_simplified_clipped(
+                        raw,
+                        target_tolerance,
+                        target_level,
+                        geo_viewport,
+                    )
+                })
+                .collect()
+        } else {
+            // Sequential processing for small result sets (avoid overhead)
+            let mut results = Vec::with_capacity(raw_results.len());
+            for raw in raw_results {
+                if let Some(simplified) = self.get_or_create_simplified_clipped(
+                    raw,
+                    target_tolerance,
+                    target_level,
+                    geo_viewport,
+                ) {
+                    results.push(simplified);
+                }
             }
+            results
         }
-
-        results
     }
 
     /// Get or create a simplified version of a segment at the given tolerance,
     /// clipped to the viewport to only include visible points.
+    ///
+    /// Returns None if the segment has no visible points after clipping.
+    #[inline]
     fn get_or_create_simplified_clipped(
         &self,
         raw: &RawSegment,
         tolerance: f64,
         tolerance_level: u32,
         viewport: Rect<f64>,
-    ) -> SimplifiedSegment {
+    ) -> Option<SimplifiedSegment> {
         // For chunked segments, we need a unique cache key that includes the chunk identity
         let chunk_hash = raw.original_indices.as_ref().map(|indices| {
             // Use first and last original index as part of key
@@ -234,51 +251,54 @@ impl Quadtree {
             chunk_hash,
         };
 
-        // Try to get simplified indices from cache first
-        let simplified_indices = {
-            let cache = self.simplification_cache.read().unwrap();
-            cache.get(&cache_key).map(|arc| arc.as_ref().clone())
-        };
-
-        let simplified_indices = simplified_indices.unwrap_or_else(|| {
-            // Not in cache, compute it
-            let indices = simplify_vw_indices_fast(&raw.mercator_points, tolerance);
-            let indices_arc = Arc::new(indices.clone());
-
-            // Store in cache
-            {
-                let mut cache = self.simplification_cache.write().unwrap();
-                cache.insert(cache_key, indices_arc);
-            }
-
-            indices
-        });
+        // Try to get simplified indices from cache first using DashMap (lock-free)
+        let simplified_indices_arc = self
+            .simplification_cache
+            .entry(cache_key)
+            .or_insert_with(|| {
+                // Not in cache, compute it
+                let indices = simplify_vw_indices_fast(&raw.mercator_points, tolerance);
+                Arc::new(indices)
+            })
+            .clone();
 
         // Now clip the simplified indices to only include points in/near the viewport
         // This returns multiple runs to handle discontinuities (exit and re-enter viewport)
         let clipped_runs =
-            clip_indices_to_viewport_runs(&simplified_indices, &raw.mercator_points, viewport);
+            clip_indices_to_viewport_runs(&simplified_indices_arc, &raw.mercator_points, viewport);
+
+        // Early return if no visible runs
+        if clipped_runs.is_empty() {
+            return None;
+        }
 
         // Convert each run to a SegmentPart
         let segment_len = raw.route.gpx_data().tracks[raw.track_index].segments[raw.segment_index]
             .points
             .len();
 
-        let parts: Vec<SegmentPart> = clipped_runs
-            .into_iter()
-            .map(|run| {
-                let final_indices = map_to_original_indices(&run, &raw.original_indices);
-                SegmentPart::new(
+        let mut parts = Vec::with_capacity(clipped_runs.len());
+        for run in clipped_runs {
+            let final_indices = map_to_original_indices(&run, &raw.original_indices);
+            if !final_indices.is_empty() {
+                parts.push(SegmentPart::new(
                     raw.track_index,
                     raw.segment_index,
                     0..segment_len,
                     final_indices,
-                )
-            })
-            .filter(|part| !part.simplified_indices.is_empty())
-            .collect();
+                ));
+            }
+        }
 
-        SimplifiedSegment::new(raw.route.clone(), raw.route_index, parts)
+        if parts.is_empty() {
+            return None;
+        }
+
+        Some(SimplifiedSegment::new(
+            raw.route.clone(),
+            raw.route_index,
+            parts,
+        ))
     }
 
     /// Calculate the appropriate LOD level for the given viewport
@@ -624,6 +644,7 @@ impl QuadtreeNode {
     }
 
     /// Query this node and its children for raw segments intersecting the viewport
+    #[inline]
     fn query_segments<'a>(&'a self, viewport: Rect<f64>, results: &mut Vec<&'a RawSegment>) {
         // Frustum culling - check if this node intersects the viewport
         if !self.intersects_viewport(viewport) {
@@ -631,6 +652,8 @@ impl QuadtreeNode {
         }
 
         // Add segments from this node that actually intersect the viewport
+        // Reserve space to reduce reallocations
+        results.reserve(self.raw_segments.len());
         for segment in &self.raw_segments {
             if segment_intersects_viewport(&segment.mercator_points, viewport) {
                 results.push(segment);
@@ -646,6 +669,7 @@ impl QuadtreeNode {
     }
 
     /// Check if this node intersects the viewport
+    #[inline(always)]
     fn intersects_viewport(&self, viewport: Rect<f64>) -> bool {
         let min = self.bounding_box.min();
         let max = self.bounding_box.max();
@@ -658,102 +682,92 @@ impl QuadtreeNode {
 }
 
 /// Check if a line segment intersects a rectangle
+/// Optimized with inlined outcode computation and minimal branching
+#[inline(always)]
 fn line_intersects_rect(p1: Point<f64>, p2: Point<f64>, rect: Rect<f64>) -> bool {
-    let min = rect.min();
-    let max = rect.max();
+    let min_x = rect.min().x;
+    let min_y = rect.min().y;
+    let max_x = rect.max().x;
+    let max_y = rect.max().y;
 
-    // Use Cohen-Sutherland-style outcode to check intersection
-    let outcode = |p: Point<f64>| -> u8 {
-        let mut code = 0u8;
-        if p.x() < min.x {
-            code |= 1;
-        } // left
-        if p.x() > max.x {
-            code |= 2;
-        } // right
-        if p.y() < min.y {
-            code |= 4;
-        } // bottom
-        if p.y() > max.y {
-            code |= 8;
-        } // top
-        code
-    };
+    let p1x = p1.x();
+    let p1y = p1.y();
+    let p2x = p2.x();
+    let p2y = p2.y();
 
-    let code1 = outcode(p1);
-    let code2 = outcode(p2);
+    // Inline outcode computation for both points
+    let code1 = ((p1x < min_x) as u8)
+        | (((p1x > max_x) as u8) << 1)
+        | (((p1y < min_y) as u8) << 2)
+        | (((p1y > max_y) as u8) << 3);
+
+    let code2 = ((p2x < min_x) as u8)
+        | (((p2x > max_x) as u8) << 1)
+        | (((p2y < min_y) as u8) << 2)
+        | (((p2y > max_y) as u8) << 3);
 
     // Both points inside
-    if code1 == 0 && code2 == 0 {
+    if (code1 | code2) == 0 {
         return true;
     }
 
-    // Both points in same outside region
-    if code1 & code2 != 0 {
+    // Both points in same outside region - trivial reject
+    if (code1 & code2) != 0 {
         return false;
     }
 
-    // Line might cross - do more detailed check
-    // Check against all 4 edges
-    let edges = [
-        (Point::new(min.x, min.y), Point::new(min.x, max.y)), // left
-        (Point::new(max.x, min.y), Point::new(max.x, max.y)), // right
-        (Point::new(min.x, min.y), Point::new(max.x, min.y)), // bottom
-        (Point::new(min.x, max.y), Point::new(max.x, max.y)), // top
-    ];
+    // Line might cross - check against edges that could be crossed
+    // Only check edges where the outcodes indicate potential crossing
 
-    for (e1, e2) in edges {
-        if segments_intersect(p1, p2, e1, e2) {
-            return true;
+    // Left edge (x = min_x)
+    if ((code1 | code2) & 1) != 0 {
+        let t = (min_x - p1x) / (p2x - p1x);
+        if t >= 0.0 && t <= 1.0 {
+            let y = p1y + t * (p2y - p1y);
+            if y >= min_y && y <= max_y {
+                return true;
+            }
+        }
+    }
+
+    // Right edge (x = max_x)
+    if ((code1 | code2) & 2) != 0 {
+        let t = (max_x - p1x) / (p2x - p1x);
+        if t >= 0.0 && t <= 1.0 {
+            let y = p1y + t * (p2y - p1y);
+            if y >= min_y && y <= max_y {
+                return true;
+            }
+        }
+    }
+
+    // Bottom edge (y = min_y)
+    if ((code1 | code2) & 4) != 0 {
+        let t = (min_y - p1y) / (p2y - p1y);
+        if t >= 0.0 && t <= 1.0 {
+            let x = p1x + t * (p2x - p1x);
+            if x >= min_x && x <= max_x {
+                return true;
+            }
+        }
+    }
+
+    // Top edge (y = max_y)
+    if ((code1 | code2) & 8) != 0 {
+        let t = (max_y - p1y) / (p2y - p1y);
+        if t >= 0.0 && t <= 1.0 {
+            let x = p1x + t * (p2x - p1x);
+            if x >= min_x && x <= max_x {
+                return true;
+            }
         }
     }
 
     false
 }
 
-/// Check if two line segments intersect
-fn segments_intersect(p1: Point<f64>, p2: Point<f64>, p3: Point<f64>, p4: Point<f64>) -> bool {
-    let d1 = direction(p3, p4, p1);
-    let d2 = direction(p3, p4, p2);
-    let d3 = direction(p1, p2, p3);
-    let d4 = direction(p1, p2, p4);
-
-    if ((d1 > 0.0 && d2 < 0.0) || (d1 < 0.0 && d2 > 0.0))
-        && ((d3 > 0.0 && d4 < 0.0) || (d3 < 0.0 && d4 > 0.0))
-    {
-        return true;
-    }
-
-    if d1 == 0.0 && on_segment(p3, p4, p1) {
-        return true;
-    }
-    if d2 == 0.0 && on_segment(p3, p4, p2) {
-        return true;
-    }
-    if d3 == 0.0 && on_segment(p1, p2, p3) {
-        return true;
-    }
-    if d4 == 0.0 && on_segment(p1, p2, p4) {
-        return true;
-    }
-
-    false
-}
-
-/// Calculate cross product direction
-fn direction(p1: Point<f64>, p2: Point<f64>, p3: Point<f64>) -> f64 {
-    (p3.x() - p1.x()) * (p2.y() - p1.y()) - (p2.x() - p1.x()) * (p3.y() - p1.y())
-}
-
-/// Check if point p is on segment (p1, p2)
-fn on_segment(p1: Point<f64>, p2: Point<f64>, p: Point<f64>) -> bool {
-    p.x() >= p1.x().min(p2.x())
-        && p.x() <= p1.x().max(p2.x())
-        && p.y() >= p1.y().min(p2.y())
-        && p.y() <= p1.y().max(p2.y())
-}
-
 /// Check if a segment (as a list of points) intersects a viewport rectangle
+#[inline]
 fn segment_intersects_viewport(points: &[Point<f64>], viewport: Rect<f64>) -> bool {
     if points.is_empty() {
         return false;
@@ -784,6 +798,7 @@ fn segment_intersects_viewport(points: &[Point<f64>], viewport: Rect<f64>) -> bo
 ///
 /// This uses the geo crate's SimplifyVwIdx trait which returns indices directly,
 /// avoiding the O(n²) mapping step.
+#[inline]
 fn simplify_vw_indices_fast(points: &[Point<f64>], tolerance: f64) -> Vec<usize> {
     if points.len() <= 2 {
         return (0..points.len()).collect();
@@ -820,75 +835,108 @@ fn map_to_original_indices(
     }
 }
 
+/// Small vector type for clipping runs - most segments have 1-2 runs
+type ClipRuns = SmallVec<[SmallVec<[usize; 32]>; 2]>;
+
 /// Clip simplified indices to only include points that are within or connected to the viewport.
-/// Returns multiple runs (Vec<Vec<usize>>) to handle discontinuities where the route exits
+/// Returns multiple runs to handle discontinuities where the route exits
 /// and re-enters the viewport - each run is a continuous sequence that should be rendered
 /// as a separate polyline.
+#[inline]
 fn clip_indices_to_viewport_runs(
     simplified_indices: &[usize],
     mercator_points: &[Point<f64>],
     viewport: Rect<f64>,
-) -> Vec<Vec<usize>> {
-    if simplified_indices.is_empty() || mercator_points.is_empty() {
-        return Vec::new();
+) -> ClipRuns {
+    let len = simplified_indices.len();
+    if len == 0 || mercator_points.is_empty() {
+        return SmallVec::new();
     }
 
-    let vmin = viewport.min();
-    let vmax = viewport.max();
+    let vmin_x = viewport.min().x;
+    let vmin_y = viewport.min().y;
+    let vmax_x = viewport.max().x;
+    let vmax_y = viewport.max().y;
 
-    // Check if a point is inside the viewport
-    let point_in_viewport = |idx: usize| -> bool {
-        if let Some(p) = mercator_points.get(idx) {
-            p.x() >= vmin.x && p.x() <= vmax.x && p.y() >= vmin.y && p.y() <= vmax.y
-        } else {
-            false
-        }
-    };
+    // Inline point-in-viewport check (optimized with direct coordinate access)
+    #[inline(always)]
+    fn point_in_bounds(p: &Point<f64>, vmin_x: f64, vmin_y: f64, vmax_x: f64, vmax_y: f64) -> bool {
+        p.x() >= vmin_x && p.x() <= vmax_x && p.y() >= vmin_y && p.y() <= vmax_y
+    }
 
-    // Check if a line segment between two simplified indices crosses the viewport
-    let line_crosses_viewport = |idx1: usize, idx2: usize| -> bool {
+    // Pre-compute viewport membership for all points
+    let in_viewport: Vec<bool> = simplified_indices
+        .iter()
+        .map(|&idx| {
+            mercator_points
+                .get(idx)
+                .is_some_and(|p| point_in_bounds(p, vmin_x, vmin_y, vmax_x, vmax_y))
+        })
+        .collect();
+
+    // Quick check: if all points are in viewport, return single run with all indices
+    let all_in = in_viewport.iter().all(|&v| v);
+    if all_in {
+        let mut runs = SmallVec::new();
+        runs.push(simplified_indices.iter().copied().collect());
+        return runs;
+    }
+
+    // Quick check: if no points in viewport, check if any lines cross
+    let any_in_viewport = in_viewport.iter().any(|&v| v);
+
+    // Line crossing check (only called when needed)
+    let line_crosses = |i: usize, j: usize| -> bool {
+        let idx1 = simplified_indices[i];
+        let idx2 = simplified_indices[j];
         match (mercator_points.get(idx1), mercator_points.get(idx2)) {
             (Some(&p1), Some(&p2)) => line_intersects_rect(p1, p2, viewport),
             _ => false,
         }
     };
 
-    let mut runs: Vec<Vec<usize>> = Vec::new();
-    let mut current_run: Vec<usize> = Vec::new();
+    // If no points in viewport, check if any line segment crosses
+    if !any_in_viewport {
+        let has_crossing = (0..len.saturating_sub(1)).any(|i| line_crosses(i, i + 1));
+        if !has_crossing {
+            return SmallVec::new();
+        }
+    }
 
-    for (i, &idx) in simplified_indices.iter().enumerate() {
-        let in_viewport = point_in_viewport(idx);
+    let mut runs: ClipRuns = SmallVec::new();
+    let mut current_run: SmallVec<[usize; 32]> = SmallVec::new();
 
-        // Check if line to previous point crosses viewport
-        let prev_line_crosses = if i > 0 {
-            line_crosses_viewport(simplified_indices[i - 1], idx)
-        } else {
-            false
-        };
+    for i in 0..len {
+        let idx = simplified_indices[i];
+        let is_in_viewport = in_viewport[i];
 
-        // Check if line to next point crosses viewport
-        let next_line_crosses = if i + 1 < simplified_indices.len() {
-            line_crosses_viewport(idx, simplified_indices[i + 1])
-        } else {
-            false
-        };
+        let prev_in = i > 0 && in_viewport[i - 1];
+        let next_in = i + 1 < len && in_viewport[i + 1];
 
-        // Should this point be included?
-        let should_include = in_viewport || prev_line_crosses || next_line_crosses;
+        // Only check line crossing when both endpoints are outside viewport
+        let prev_line_crosses = i > 0 && !prev_in && !is_in_viewport && line_crosses(i - 1, i);
+        let next_line_crosses =
+            i + 1 < len && !next_in && !is_in_viewport && line_crosses(i, i + 1);
+
+        // Point is relevant if it or adjacent points are in viewport, or lines cross
+        let prev_relevant = i > 0 && (prev_in || is_in_viewport || prev_line_crosses);
+        let next_relevant = i + 1 < len && (next_in || is_in_viewport || next_line_crosses);
+
+        let should_include = is_in_viewport || prev_relevant || next_relevant;
 
         if should_include {
             // Starting a new run? Include the previous point for line continuity at entry
-            if current_run.is_empty() && i > 0 && prev_line_crosses {
+            if current_run.is_empty() && i > 0 && !prev_in {
                 current_run.push(simplified_indices[i - 1]);
             }
 
             current_run.push(idx);
 
-            // If this point is an "exit" point (next line crosses but next point not in viewport),
-            // we need to include the next point for continuity, then end the run
-            if next_line_crosses && i + 1 < simplified_indices.len() {
+            // If next point is outside viewport, check if we should end this run
+            if i + 1 < len && !next_in {
                 let next_idx = simplified_indices[i + 1];
-                if !point_in_viewport(next_idx) {
+                // Check if we're actually exiting (current in viewport or line crosses)
+                if is_in_viewport || line_crosses(i, i + 1) {
                     // Include exit point
                     current_run.push(next_idx);
                     // End this run - route is leaving viewport
