@@ -263,39 +263,45 @@ impl AppState {
         let rt = tokio::runtime::Handle::try_current()
             .expect("Must be called from within a tokio runtime");
 
-        rt.spawn({
-            let results = results.clone();
-            let total_files = total_files.clone();
-            async move {
-                {
-                    let mut total_files_lock = total_files.write().await;
-                    *total_files_lock = files_len;
-                }
-                for path in files_to_load {
-                    let result = (|| async {
-                        use tokio::io::AsyncReadExt;
-                        let file = tokio::fs::File::open(&path)
-                            .await
-                            .map_err(|e| format!("Failed to open file: {}", e))?;
-                        let mut reader = tokio::io::BufReader::new(file);
-                        let mut buf = Vec::new();
-                        reader
-                            .read_to_end(&mut buf)
-                            .await
-                            .map_err(|e| format!("Failed to read file: {}", e))?;
-                        let cursor = std::io::Cursor::new(buf);
-                        gpx::read(cursor).map_err(|e| format!("Failed to parse GPX: {}", e))
-                    })()
-                    .await;
+        {
+            let mut total_files_lock = futures::executor::block_on(total_files.write());
+            *total_files_lock = files_len;
+        }
+        // Limit concurrency to number of logical CPU cores
+        let max_concurrent = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4); // fallback to 4 if detection fails
+        let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(max_concurrent));
 
-                    // Push result immediately so UI can process it while we parse the next file
-                    let mut results_lock = results.write().await;
-                    results_lock.push((path, result));
-                    // Yield to allow other tasks to run (helps UI responsiveness)
-                    tokio::task::yield_now().await;
-                }
-            }
-        });
+        for path in files_to_load {
+            let results = results.clone();
+            let semaphore = semaphore.clone();
+            rt.spawn(async move {
+                let permit = semaphore.acquire_owned().await.unwrap();
+                use tokio::io::AsyncReadExt;
+                let result = (|| async {
+                    let file = tokio::fs::File::open(&path)
+                        .await
+                        .map_err(|e| format!("Failed to open file: {}", e))?;
+                    let mut reader = tokio::io::BufReader::new(file);
+                    let mut buf = Vec::new();
+                    reader
+                        .read_to_end(&mut buf)
+                        .await
+                        .map_err(|e| format!("Failed to read file: {}", e))?;
+                    let cursor = std::io::Cursor::new(buf);
+                    gpx::read(cursor).map_err(|e| format!("Failed to parse GPX: {}", e))
+                })()
+                .await;
+
+                // Push result immediately so UI can process it while we parse the next file
+                let mut results_lock = results.write().await;
+                results_lock.push((path, result));
+                // Yield to allow other tasks to run (helps UI responsiveness)
+                tokio::task::yield_now().await;
+                drop(permit); // release semaphore
+            });
+        }
     }
 
     /// Start parallel loading (WASM fallback - sequential)
