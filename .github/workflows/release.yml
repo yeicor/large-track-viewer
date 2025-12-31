@@ -27,7 +27,7 @@ jobs:
 
       - id: check_version
         run: |
-          CURRENT_VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          CURRENT_VERSION=$(grep '^version = ' crates/large-track-viewer/Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
           echo "Current version in Cargo.toml: $CURRENT_VERSION"
           echo "Tag version: ${{ steps.get_version.outputs.version }}"
           if [ "$CURRENT_VERSION" != "${{ steps.get_version.outputs.version }}" ]; then
@@ -50,13 +50,13 @@ jobs:
             exit 1
           fi
 
-          sed -i 's/^version = ".*"/version = "${{ steps.get_version.outputs.version }}"/' Cargo.toml
+          find . -name "Cargo.toml" -exec sed -i 's/^version = ".*"/version = "${{ steps.get_version.outputs.version }}"/' {} \;
           cargo generate-lockfile
 
           # Now push the changes and force update the tag to point to this new commit
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Cargo.toml Cargo.lock
+          git add $(find . -name "Cargo.toml") Cargo.lock
           git commit -m "Sync version to ${{ steps.get_version.outputs.version }}"
           git tag -f ${{ steps.get_version.outputs.tag }}
           git push origin HEAD --tags --force
