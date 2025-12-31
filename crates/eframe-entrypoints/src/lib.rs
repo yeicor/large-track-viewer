@@ -96,13 +96,13 @@ pub use eframe::CreationContext;
 /// pub fn run_native() { ... }  // Call this from main.rs
 /// ```
 #[macro_export]
-macro_rules! eframe_app {
+macro_rules! eframe_app_lib {
     ($app_name:expr, $app_creator:expr) => {
         // ==========================================
         // Web (WASM) entry point
         // ==========================================
         #[cfg(target_arch = "wasm32")]
-        #[no_mangle]
+        #[unsafe(no_mangle)] // SAFETY: there is no other global function of this name
         pub fn create_egui_app(
             cc: &$crate::eframe::CreationContext<'_>,
         ) -> Box<dyn $crate::eframe::App> {
@@ -115,7 +115,7 @@ macro_rules! eframe_app {
         // Android entry point
         // ==========================================
         #[cfg(target_os = "android")]
-        #[unsafe(no_mangle)]
+        #[unsafe(no_mangle)] // SAFETY: there is no other global function of this name
         pub fn android_main(app: ::winit::platform::android::activity::AndroidApp) {
             $crate::android_main_impl($app_name, app, $app_creator);
         }
@@ -141,6 +141,16 @@ macro_rules! eframe_app {
             rt.block_on(async {
                 $crate::native_main_impl($app_name, $app_creator).await;
             });
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! eframe_app_main {
+    () => {
+        fn main() {
+            #[cfg(not(target_arch = "wasm32"))]
+            large_track_viewer::run_native();
         }
     };
 }

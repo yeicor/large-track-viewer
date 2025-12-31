@@ -20,7 +20,7 @@ profiling = ["eframe-entrypoints/profiling"]
 [dependencies]
 # === Local crates ===
 large-track-lib = { path = "../large-track-lib", features = ["serde"] }
-eframe-entrypoints = { path = "../eframe-entrypoints" }
+eframe-entrypoints = { path = "../eframe-entrypoints", default-features = false }
 
 # === UI Framework ===
 eframe.workspace = true
@@ -46,7 +46,6 @@ gpx.workspace = true
 instant = { version = "0.1", features = ["wasm-bindgen"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-rayon = "1.10"
 futures = "0.3"
 
 # === Native (desktop & mobile) ===

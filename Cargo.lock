@@ -1327,6 +1327,7 @@ dependencies = [
  "tracing-subscriber",
  "tracing-wasm",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-sys",
  "winit",
 ]
@@ -2768,7 +2769,6 @@ dependencies = [
  "instant",
  "large-track-lib",
  "profiling",
- "rayon",
  "rfd",
  "serde",
  "serde_json",

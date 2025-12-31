@@ -8,9 +8,10 @@
 /// the chrome layer and managing the FlushGuard lifecycle.
 /// The trace file is automatically served over HTTP on port 9001 and
 /// Perfetto UI is opened with the trace URL when profiling stops.
+#[cfg(feature = "profiling")]
 use std::path::PathBuf;
+#[cfg(feature = "profiling")]
 use std::sync::Mutex;
-
 #[cfg(feature = "profiling")]
 use tracing_chrome::{ChromeLayer, FlushGuard};
 #[cfg(feature = "profiling")]

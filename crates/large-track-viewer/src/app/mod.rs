@@ -16,6 +16,7 @@ use crate::app::plugin::{RenderStats, TrackPlugin};
 use crate::app::settings::Settings;
 use crate::app::state::{AppState, SidebarTab, TilesProvider};
 use eframe::egui;
+use egui::DroppedFile;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use walkers::{
@@ -107,8 +108,17 @@ impl LargeTrackViewerApp {
         };
 
         // Add any CLI-specified files to pending (they take priority)
-        for file in &cli_args.gpx_files {
-            state.queue_file(file.clone());
+        for file_path in &cli_args.gpx_files {
+            state.queue_file(DroppedFile {
+                name: file_path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_str()
+                    .unwrap_or_default()
+                    .to_owned(),
+                path: Some(file_path.clone()),
+                ..Default::default()
+            });
         }
 
         // Create tiles providers
@@ -171,7 +181,7 @@ impl LargeTrackViewerApp {
         };
 
         // Queue files for reloading (persisted + CLI), deduplicating by canonical path
-        let mut pending_files: Vec<std::path::PathBuf> = Vec::new();
+        let mut pending_files: Vec<DroppedFile> = Vec::new();
         let mut seen_paths: std::collections::HashSet<std::path::PathBuf> =
             std::collections::HashSet::new();
 
@@ -181,7 +191,15 @@ impl LargeTrackViewerApp {
                 // Use canonical path to detect duplicates regardless of relative/absolute paths
                 let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
                 if seen_paths.insert(canonical) {
-                    pending_files.push(path);
+                    pending_files.push(DroppedFile {
+                        name: path
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .to_string(),
+                        path: Some(path),
+                        ..Default::default()
+                    });
                 }
             }
         };
@@ -210,7 +228,6 @@ impl LargeTrackViewerApp {
 
         let file_loader = FileLoader {
             pending_files,
-            loading_file: None,
             errors: Vec::new(),
             loaded_files: Vec::new(),
             show_picker: false,
@@ -299,6 +316,8 @@ impl eframe::App for LargeTrackViewerApp {
         ui_panels::handle_drag_and_drop(ctx, &mut self.state);
 
         // Handle file picker
+        // TODO: File picker on more platforms (required on mobile!)
+        #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
         ui_panels::show_file_picker(&mut self.state);
 
         // Show help overlay if enabled
@@ -428,15 +447,11 @@ impl eframe::App for LargeTrackViewerApp {
 
         // Add pending files
         for path in &self.state.file_loader.pending_files {
-            let path_str = path.to_string_lossy().to_string();
-            if !all_file_paths.contains(&path_str) {
-                all_file_paths.push(path_str);
-            }
-        }
-
-        // Add currently loading file
-        if let Some(ref path) = self.state.file_loader.loading_file {
-            let path_str = path.to_string_lossy().to_string();
+            let path_str = path
+                .path
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default();
             if !all_file_paths.contains(&path_str) {
                 all_file_paths.push(path_str);
             }

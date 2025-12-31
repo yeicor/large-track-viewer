@@ -6,7 +6,7 @@
 use eframe::wasm_bindgen::{self, prelude::*};
 
 // This function must be provided by the application crate
-extern "Rust" {
+unsafe extern "Rust" {
     /// Create the application instance.
     /// This function must be implemented by the application crate using the
     /// `egui_app_creator!` macro or manually.

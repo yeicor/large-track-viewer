@@ -4,12 +4,12 @@
 //! UI settings, and file loading operations.
 
 use crate::app::settings::Settings;
+use egui::DroppedFile;
 use large_track_lib::{Config, RouteCollection};
 use std::path::PathBuf;
 use std::sync::Arc;
-#[cfg(target_arch = "wasm32")]
-use std::sync::RwLock;
 #[cfg(not(target_arch = "wasm32"))]
+use tokio::io::AsyncReadExt;
 use tokio::sync::RwLock;
 
 /// Main application state
@@ -101,10 +101,7 @@ impl TilesProvider {
 /// File loading state and operations
 pub struct FileLoader {
     /// Files pending load
-    pub pending_files: Vec<PathBuf>,
-
-    /// Currently loading file
-    pub loading_file: Option<PathBuf>,
+    pub pending_files: Vec<DroppedFile>,
 
     /// Load errors
     pub errors: Vec<(PathBuf, String)>,
@@ -117,16 +114,10 @@ pub struct FileLoader {
 
     /// Results from parallel loading (path, result) - accumulated incrementally
     #[allow(clippy::type_complexity)]
-    #[cfg(not(target_arch = "wasm32"))]
     pub parallel_load_results: Arc<tokio::sync::RwLock<Vec<(PathBuf, Result<gpx::Gpx, String>)>>>,
-    #[cfg(target_arch = "wasm32")]
-    pub parallel_load_results: Arc<std::sync::RwLock<Vec<(PathBuf, Result<gpx::Gpx, String>)>>>,
 
     /// Total number of files in current parallel load batch
-    #[cfg(not(target_arch = "wasm32"))]
     pub parallel_total_files: Arc<tokio::sync::RwLock<usize>>,
-    #[cfg(target_arch = "wasm32")]
-    pub parallel_total_files: Arc<std::sync::RwLock<usize>>,
 }
 
 /// Statistics about loaded data
@@ -179,8 +170,19 @@ impl AppState {
         };
 
         let file_loader = FileLoader {
-            pending_files: settings.gpx_files.clone(),
-            loading_file: None,
+            pending_files: settings
+                .gpx_files
+                .iter()
+                .map(|path| DroppedFile {
+                    name: path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string(),
+                    path: Some(path.clone()),
+                    ..Default::default()
+                })
+                .collect(),
             errors: Vec::new(),
             loaded_files: Vec::new(),
             show_picker: false,
@@ -200,59 +202,34 @@ impl AppState {
         }
     }
 
-    /// Load a GPX file into the collection (single-threaded, for sequential loading)
-    pub fn load_gpx_file(&mut self, path: PathBuf) -> Result<(), String> {
-        profiling::scope!("load_gpx_file");
-
-        self.file_loader.loading_file = Some(path.clone());
-
-        // Read and parse the GPX file OUTSIDE of the lock
-        let gpx_result = (|| -> Result<gpx::Gpx, String> {
-            let file =
-                std::fs::File::open(&path).map_err(|e| format!("Failed to open file: {}", e))?;
-            let reader = std::io::BufReader::new(file);
-            gpx::read(reader).map_err(|e| format!("Failed to parse GPX: {}", e))
-        })();
-
-        self.file_loader.loading_file = None;
-
-        match gpx_result {
-            Ok(gpx) => {
-                // Only acquire the write lock when modifying the collection
-                let add_result = {
-                    if let Ok(mut collection) = self.route_collection.try_write() {
-                        collection
-                            .add_route(gpx.clone())
-                            .map_err(|e| format!("Failed to add route: {}", e))
-                    } else {
-                        Err("Could not acquire write lock on route_collection".to_string())
-                    }
-                };
-
-                match add_result {
-                    Ok(_) => {
-                        self.file_loader.loaded_files.push((path.clone(), gpx));
-                        self.update_stats();
-                        // Request auto-zoom to fit new tracks
-                        self.pending_fit_bounds = true;
-                        Ok(())
-                    }
-                    Err(e) => {
-                        self.file_loader.errors.push((path, e.clone().to_string()));
-                        Err(e)
-                    }
-                }
+    // Load a single file
+    async fn load_file_to_gpx(file: &DroppedFile) -> Result<gpx::Gpx, String> {
+        let buf = {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let file = tokio::fs::File::open(file.path.as_ref().unwrap())
+                    .await
+                    .map_err(|e| format!("Error opening file: {:?}", e))?;
+                let mut reader = tokio::io::BufReader::new(file);
+                let mut buf = Vec::new();
+                reader
+                    .read_to_end(&mut buf)
+                    .await
+                    .map_err(|e| format!("Failed to read file: {}", e))?;
+                buf
             }
-            Err(e) => {
-                self.file_loader.errors.push((path, e.clone().to_string()));
-                Err(e)
+            #[cfg(target_arch = "wasm32")]
+            {
+                file.bytes.clone().unwrap()
             }
-        }
+        };
+        let cursor = std::io::Cursor::new(buf);
+        return gpx::read(cursor).map_err(|e| format!("Failed to parse GPX: {}", e));
     }
 
     /// Start parallel loading of all pending files
     pub fn start_parallel_load(&mut self) {
-        let files_to_load: Vec<PathBuf> = self.file_loader.pending_files.drain(..).collect();
+        let files_to_load: Vec<DroppedFile> = self.file_loader.pending_files.drain(..).collect();
         if files_to_load.is_empty() {
             return;
         }
@@ -278,29 +255,16 @@ impl AppState {
             .unwrap_or(4); // fallback to 4 if detection fails
         let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(max_concurrent));
 
-        for path in files_to_load {
+        for dropped_file in files_to_load {
             let results = results.clone();
             let semaphore = semaphore.clone();
             rt.spawn(async move {
                 let permit = semaphore.acquire_owned().await.unwrap();
-                use tokio::io::AsyncReadExt;
-                let result = (|| async {
-                    let file = tokio::fs::File::open(&path)
-                        .await
-                        .map_err(|e| format!("Failed to open file: {}", e))?;
-                    let mut reader = tokio::io::BufReader::new(file);
-                    let mut buf = Vec::new();
-                    reader
-                        .read_to_end(&mut buf)
-                        .await
-                        .map_err(|e| format!("Failed to read file: {}", e))?;
-                    let cursor = std::io::Cursor::new(buf);
-                    gpx::read(cursor).map_err(|e| format!("Failed to parse GPX: {}", e))
-                })()
-                .await;
-
-                // Push result immediately so UI can process it while we parse the next file
-                results.write().await.push((path, result));
+                let result = Self::load_file_to_gpx(&dropped_file).await;
+                results
+                    .write()
+                    .await
+                    .push((dropped_file.path.unwrap(), result));
                 drop(permit); // release semaphore
                 // Yield to allow other tasks to run (helps UI responsiveness)
                 tokio::task::yield_now().await;
@@ -434,22 +398,17 @@ impl AppState {
     pub fn process_pending_files(&mut self) {
         // First check for parallel results
         self.process_parallel_results();
-
-        // Then process any remaining files one at a time
-        if let Some(path) = self.file_loader.pending_files.pop() {
-            let _ = self.load_gpx_file(path);
-        }
     }
 
     /// Add a file to the pending load queue
-    pub fn queue_file(&mut self, path: PathBuf) {
+    pub fn queue_file(&mut self, dropped_file: DroppedFile) {
         let already_loaded = self
             .file_loader
             .loaded_files
             .iter()
-            .any(|(p, _)| p == &path);
-        if !self.file_loader.pending_files.contains(&path) && !already_loaded {
-            self.file_loader.pending_files.push(path);
+            .any(|(p, _)| p == dropped_file.path.as_ref().unwrap());
+        if !self.file_loader.pending_files.contains(&dropped_file) && !already_loaded {
+            self.file_loader.pending_files.push(dropped_file);
         }
     }
 
@@ -597,9 +556,7 @@ impl FileLoader {
             Err(_) => 0,
         };
         let processed = self.loaded_files.len() + self.errors.len();
-        self.loading_file.is_some()
-            || !self.pending_files.is_empty()
-            || (total > 0 && processed < total)
+        !self.pending_files.is_empty() || (total > 0 && processed < total)
     }
 }
 

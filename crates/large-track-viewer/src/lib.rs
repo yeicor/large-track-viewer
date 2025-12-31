@@ -8,6 +8,6 @@ mod app;
 pub use app::LargeTrackViewerApp;
 
 // Define all platform entry points using the unified macro
-eframe_entrypoints::eframe_app!("Large Track Viewer", |cc| Box::new(
+eframe_entrypoints::eframe_app_lib!("Large Track Viewer", |cc| Box::new(
     LargeTrackViewerApp::new(cc)
 ));

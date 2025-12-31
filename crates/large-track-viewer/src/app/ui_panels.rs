@@ -458,7 +458,7 @@ fn render_settings_tab(ui: &mut Ui, state: &mut AppState) {
 }
 
 /// Show file picker dialog
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
 pub fn show_file_picker(state: &mut AppState) {
     if state.file_loader.show_picker {
         state.file_loader.show_picker = false;
@@ -469,21 +469,20 @@ pub fn show_file_picker(state: &mut AppState) {
             .pick_files()
         {
             for path in paths {
-                state.queue_file(path);
+                state.queue_file(egui::DroppedFile {
+                    name: path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_str()
+                        .unwrap_or_default()
+                        .to_owned(),
+                    path: Some(path),
+                    ..Default::default()
+                });
             }
             // Start parallel loading for newly added files
             state.start_parallel_load();
         }
-    }
-}
-
-/// Show file picker dialog (WASM - not fully supported)
-#[cfg(target_arch = "wasm32")]
-pub fn show_file_picker(state: &mut AppState) {
-    if state.file_loader.show_picker {
-        state.file_loader.show_picker = false;
-        // File picker on WASM would require async handling
-        // For now, rely on drag-and-drop
     }
 }
 
@@ -525,13 +524,7 @@ pub fn help_overlay(ctx: &egui::Context, show_help: &mut bool) {
 pub fn handle_drag_and_drop(ctx: &egui::Context, state: &mut AppState) {
     // Only read input state inside ctx.input
     let hovered_files = ctx.input(|i| !i.raw.hovered_files.is_empty());
-    let dropped_files: Vec<_> = ctx.input(|i| {
-        i.raw
-            .dropped_files
-            .iter()
-            .filter_map(|file| file.path.clone())
-            .collect()
-    });
+    let dropped_files: Vec<_> = ctx.input(|i| i.raw.dropped_files.clone());
 
     // Show drop preview if files are hovered
     if hovered_files {
@@ -558,9 +551,16 @@ pub fn handle_drag_and_drop(ctx: &egui::Context, state: &mut AppState) {
 
     // Handle dropped files outside of ctx.input
     let mut files_dropped = false;
-    for path in dropped_files {
-        if path.extension().map(|e| e == "gpx").unwrap_or(false) {
-            state.queue_file(path.clone());
+    for dropped_file in dropped_files {
+        if dropped_file
+            .path
+            .as_ref()
+            .unwrap()
+            .extension()
+            .map(|e| e == "gpx")
+            .unwrap_or(false)
+        {
+            state.queue_file(dropped_file.clone());
             files_dropped = true;
         }
     }
