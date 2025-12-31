@@ -523,43 +523,50 @@ pub fn help_overlay(ctx: &egui::Context, show_help: &mut bool) {
 
 /// Handle drag and drop of GPX files
 pub fn handle_drag_and_drop(ctx: &egui::Context, state: &mut AppState) {
-    // Preview dropped files
-    ctx.input(|i| {
-        if !i.raw.hovered_files.is_empty() {
-            // Show drop preview
-            let painter = ctx.layer_painter(egui::LayerId::new(
-                egui::Order::Foreground,
-                egui::Id::new("drop_preview"),
-            ));
-
-            let screen_rect = ctx.viewport_rect();
-            painter.rect_filled(screen_rect, 0.0, egui::Color32::from_black_alpha(100));
-
-            painter.text(
-                screen_rect.center(),
-                egui::Align2::CENTER_CENTER,
-                "📂 Drop GPX files here",
-                egui::FontId::proportional(32.0),
-                egui::Color32::WHITE,
-            );
-        }
-
-        // Handle dropped files
-        let mut files_dropped = false;
-        for file in &i.raw.dropped_files {
-            if let Some(path) = &file.path
-                && path.extension().map(|e| e == "gpx").unwrap_or(false)
-            {
-                state.queue_file(path.clone());
-                files_dropped = true;
-            }
-        }
-
-        // Start parallel loading if files were dropped
-        if files_dropped {
-            state.start_parallel_load();
-        }
+    // Only read input state inside ctx.input
+    let hovered_files = ctx.input(|i| !i.raw.hovered_files.is_empty());
+    let dropped_files: Vec<_> = ctx.input(|i| {
+        i.raw
+            .dropped_files
+            .iter()
+            .filter_map(|file| file.path.clone())
+            .collect()
     });
+
+    // Show drop preview if files are hovered
+    if hovered_files {
+        let painter = ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Foreground,
+            egui::Id::new("drop_preview"),
+        ));
+        let screen_rect = ctx.content_rect();
+        let bg_size = egui::vec2(340.0, 80.0);
+        let bg_rect = egui::Rect::from_center_size(screen_rect.center(), bg_size);
+        painter.rect_filled(
+            bg_rect,
+            16.0, // rounding
+            egui::Color32::from_black_alpha(180),
+        );
+        painter.text(
+            screen_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            "📂 Drop GPX files here",
+            egui::FontId::proportional(32.0),
+            egui::Color32::WHITE,
+        );
+    }
+
+    // Handle dropped files outside of ctx.input
+    let mut files_dropped = false;
+    for path in dropped_files {
+        if path.extension().map(|e| e == "gpx").unwrap_or(false) {
+            state.queue_file(path.clone());
+            files_dropped = true;
+        }
+    }
+    if files_dropped {
+        state.start_parallel_load();
+    }
 }
 
 /// Show mouse wheel zoom warning

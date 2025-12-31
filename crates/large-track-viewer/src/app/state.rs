@@ -220,10 +220,13 @@ impl AppState {
             Ok(gpx) => {
                 // Only acquire the write lock when modifying the collection
                 let add_result = {
-                    let mut collection = futures::executor::block_on(self.route_collection.write());
-                    collection
-                        .add_route(gpx.clone())
-                        .map_err(|e| format!("Failed to add route: {}", e))
+                    if let Ok(mut collection) = self.route_collection.try_write() {
+                        collection
+                            .add_route(gpx.clone())
+                            .map_err(|e| format!("Failed to add route: {}", e))
+                    } else {
+                        Err("Could not acquire write lock on route_collection".to_string())
+                    }
                 };
 
                 match add_result {
@@ -248,7 +251,6 @@ impl AppState {
     }
 
     /// Start parallel loading of all pending files
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn start_parallel_load(&mut self) {
         let files_to_load: Vec<PathBuf> = self.file_loader.pending_files.drain(..).collect();
         if files_to_load.is_empty() {
@@ -264,10 +266,13 @@ impl AppState {
             .expect("Must be called from within a tokio runtime");
 
         {
-            let mut total_files_lock = futures::executor::block_on(total_files.write());
-            *total_files_lock = files_len;
+            if let Ok(mut total_files_lock) = total_files.try_write() {
+                *total_files_lock = files_len;
+            } else {
+                // Could not acquire lock; skip updating this frame
+            }
         }
-        // Limit concurrency to number of logical CPU cores
+        // Limit concurrency to number of logical CPU cores (native only)
         let max_concurrent = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(4); // fallback to 4 if detection fails
@@ -295,20 +300,12 @@ impl AppState {
                 .await;
 
                 // Push result immediately so UI can process it while we parse the next file
-                let mut results_lock = results.write().await;
-                results_lock.push((path, result));
+                results.write().await.push((path, result));
+                drop(permit); // release semaphore
                 // Yield to allow other tasks to run (helps UI responsiveness)
                 tokio::task::yield_now().await;
-                drop(permit); // release semaphore
             });
         }
-    }
-
-    /// Start parallel loading (WASM fallback - sequential)
-    #[cfg(target_arch = "wasm32")]
-    pub async fn start_parallel_load(&mut self) {
-        // On WASM, just process one at a time in the main loop
-        // The pending_files will be processed by process_pending_files
     }
 
     /// Process results from parallel loading incrementally.
@@ -399,8 +396,9 @@ impl AppState {
 
     /// Reset parallel loading state (called when all routes are added)
     fn reset_parallel_loading(&mut self) {
-        futures::executor::block_on(self.file_loader.parallel_total_files.write())
-            .clone_from(&mut 0);
+        if let Ok(mut total_files_lock) = self.file_loader.parallel_total_files.try_write() {
+            *total_files_lock = 0;
+        }
         // WASM-specific code removed; async version is now used everywhere.
     }
 
