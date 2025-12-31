@@ -224,7 +224,7 @@ impl AppState {
             }
         };
         let cursor = std::io::Cursor::new(buf);
-        return gpx::read(cursor).map_err(|e| format!("Failed to parse GPX: {}", e));
+        gpx::read(cursor).map_err(|e| format!("Failed to parse GPX: {}", e))
     }
 
     /// Start parallel loading of all pending files

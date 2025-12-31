@@ -82,10 +82,8 @@ pub fn waypoint_to_mercator(waypoint: &gpx::Waypoint) -> Point<f64> {
 pub fn is_valid_mercator(point: &Point<f64>) -> bool {
     let x = point.x();
     let y = point.y();
-    x >= EARTH_MERCATOR_MIN
-        && x <= EARTH_MERCATOR_MAX
-        && y >= EARTH_MERCATOR_MIN
-        && y <= EARTH_MERCATOR_MAX
+    (EARTH_MERCATOR_MIN..=EARTH_MERCATOR_MAX).contains(&x)
+        && (EARTH_MERCATOR_MIN..=EARTH_MERCATOR_MAX).contains(&y)
 }
 
 #[cfg(test)]

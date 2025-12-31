@@ -771,7 +771,7 @@ fn line_intersects_rect(p1: Point<f64>, p2: Point<f64>, rect: Rect<f64>) -> bool
     // Left edge (x = min_x)
     if ((code1 | code2) & 1) != 0 {
         let t = (min_x - p1x) / (p2x - p1x);
-        if t >= 0.0 && t <= 1.0 {
+        if (0.0..=1.0).contains(&t) {
             let y = p1y + t * (p2y - p1y);
             if y >= min_y && y <= max_y {
                 return true;
@@ -782,7 +782,7 @@ fn line_intersects_rect(p1: Point<f64>, p2: Point<f64>, rect: Rect<f64>) -> bool
     // Right edge (x = max_x)
     if ((code1 | code2) & 2) != 0 {
         let t = (max_x - p1x) / (p2x - p1x);
-        if t >= 0.0 && t <= 1.0 {
+        if (0.0..=1.0).contains(&t) {
             let y = p1y + t * (p2y - p1y);
             if y >= min_y && y <= max_y {
                 return true;
@@ -793,7 +793,7 @@ fn line_intersects_rect(p1: Point<f64>, p2: Point<f64>, rect: Rect<f64>) -> bool
     // Bottom edge (y = min_y)
     if ((code1 | code2) & 4) != 0 {
         let t = (min_y - p1y) / (p2y - p1y);
-        if t >= 0.0 && t <= 1.0 {
+        if (0.0..=1.0).contains(&t) {
             let x = p1x + t * (p2x - p1x);
             if x >= min_x && x <= max_x {
                 return true;
@@ -804,7 +804,7 @@ fn line_intersects_rect(p1: Point<f64>, p2: Point<f64>, rect: Rect<f64>) -> bool
     // Top edge (y = max_y)
     if ((code1 | code2) & 8) != 0 {
         let t = (max_y - p1y) / (p2y - p1y);
-        if t >= 0.0 && t <= 1.0 {
+        if (0.0..=1.0).contains(&t) {
             let x = p1x + t * (p2x - p1x);
             if x >= min_x && x <= max_x {
                 return true;
@@ -972,10 +972,13 @@ fn clip_indices_small_bitset(
     // Build bitset of points in viewport
     let mut in_viewport_bits: u64 = 0;
     for (i, &idx) in simplified_indices.iter().enumerate() {
-        if let Some(p) = mercator_points.get(idx) {
-            if p.x() >= vmin_x && p.x() <= vmax_x && p.y() >= vmin_y && p.y() <= vmax_y {
-                in_viewport_bits |= 1u64 << i;
-            }
+        if let Some(p) = mercator_points.get(idx)
+            && p.x() >= vmin_x
+            && p.x() <= vmax_x
+            && p.y() >= vmin_y
+            && p.y() <= vmax_y
+        {
+            in_viewport_bits |= 1u64 << i;
         }
     }
 

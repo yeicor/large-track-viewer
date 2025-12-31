@@ -259,8 +259,8 @@ impl LargeTrackViewerApp {
             let center_lat = (min_lat + max_lat) / 2.0;
             let center_lon = (min_lon + max_lon) / 2.0;
 
-            let lat_span = (max_lat as f64 - min_lat as f64).abs();
-            let lon_span = (max_lon as f64 - min_lon as f64).abs();
+            let lat_span = (max_lat - min_lat).abs();
+            let lon_span = (max_lon - min_lon).abs();
             let max_span = lat_span.max(lon_span);
 
             let zoom = if max_span > 0.0 {
