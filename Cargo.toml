@@ -34,6 +34,7 @@ geo = "0.31"
 
 # === Web ===
 web-sys = "0.3"
+futures = "0.3"
 
 
 

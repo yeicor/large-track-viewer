@@ -16,7 +16,8 @@ use crate::app::plugin::{RenderStats, TrackPlugin};
 use crate::app::settings::Settings;
 use crate::app::state::{AppState, SidebarTab, TilesProvider};
 use eframe::egui;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use walkers::{
     HttpTiles, Map, MapMemory, TileId,
     sources::{Attribution, OpenStreetMap, TileSource},
@@ -231,18 +232,22 @@ impl LargeTrackViewerApp {
 
     /// Fit the map view to the bounding box of all loaded tracks
     fn fit_to_bounds(&mut self) {
-        let collection = self.state.route_collection.read().unwrap();
+        // Use try_read for non-blocking UI polling.
+        let collection = match self.state.route_collection.try_read() {
+            Ok(guard) => guard,
+            Err(_) => return, // Skip if lock is not available
+        };
 
         if let Some((min_lat, min_lon, max_lat, max_lon)) = collection.bounding_box_wgs84() {
             let center_lat = (min_lat + max_lat) / 2.0;
             let center_lon = (min_lon + max_lon) / 2.0;
 
-            let lat_span = (max_lat - min_lat).abs();
-            let lon_span = (max_lon - min_lon).abs();
+            let lat_span = (max_lat as f64 - min_lat as f64).abs();
+            let lon_span = (max_lon as f64 - min_lon as f64).abs();
             let max_span = lat_span.max(lon_span);
 
             let zoom = if max_span > 0.0 {
-                let zoom_estimate = (4.0 * 360.0 / max_span).log2();
+                let zoom_estimate = (4.0 * 360.0 / max_span).log2() as f32;
                 (zoom_estimate - 0.5).clamp(1.0, 18.0)
             } else {
                 12.0
@@ -250,7 +255,7 @@ impl LargeTrackViewerApp {
 
             self.map_memory
                 .center_at(walkers::lat_lon(center_lat, center_lon));
-            let _ = self.map_memory.set_zoom(zoom);
+            let _ = self.map_memory.set_zoom(zoom as f64);
 
             tracing::trace!(
                 "Auto-zoomed to bounds: ({:.4}, {:.4}) - ({:.4}, {:.4}), zoom: {:.1}",
@@ -354,10 +359,12 @@ impl eframe::App for LargeTrackViewerApp {
                 self.state.stats.last_query_time_ms = query_time.as_secs_f64() * 1000.0;
 
                 {
-                    let render_stats = self.render_stats.read().unwrap();
-                    self.state.stats.last_query_segments = render_stats.segments_rendered;
-                    self.state.stats.last_query_simplified_points =
-                        render_stats.simplified_points_rendered;
+                    // Use try_read for non-blocking UI polling.
+                    if let Ok(render_stats) = self.render_stats.try_read() {
+                        self.state.stats.last_query_segments = render_stats.segments_rendered;
+                        self.state.stats.last_query_simplified_points =
+                            render_stats.simplified_points_rendered;
+                    }
                 }
 
                 ui_panels::sidebar_toggle_button(ui, &mut self.state);
@@ -436,11 +443,13 @@ impl eframe::App for LargeTrackViewerApp {
         }
 
         // Add files being processed in parallel (from results queue)
-        if let Ok(results) = self.state.file_loader.parallel_load_results.read() {
-            for (path, _) in results.iter() {
-                let path_str = path.to_string_lossy().to_string();
-                if !all_file_paths.contains(&path_str) {
-                    all_file_paths.push(path_str);
+        {
+            if let Ok(results) = self.state.file_loader.parallel_load_results.try_read() {
+                for (path, _) in results.iter() {
+                    let path_str: String = path.to_string_lossy().to_string();
+                    if !all_file_paths.contains(&path_str) {
+                        all_file_paths.push(path_str);
+                    }
                 }
             }
         }

@@ -2762,6 +2762,7 @@ dependencies = [
  "eframe",
  "eframe-entrypoints",
  "egui",
+ "futures",
  "geo",
  "gpx",
  "instant",

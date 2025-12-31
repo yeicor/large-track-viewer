@@ -6,7 +6,11 @@
 use crate::app::settings::Settings;
 use large_track_lib::{Config, RouteCollection};
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+#[cfg(target_arch = "wasm32")]
+use std::sync::RwLock;
+#[cfg(not(target_arch = "wasm32"))]
+use tokio::sync::RwLock;
 
 /// Main application state
 pub struct AppState {
@@ -113,10 +117,16 @@ pub struct FileLoader {
 
     /// Results from parallel loading (path, result) - accumulated incrementally
     #[allow(clippy::type_complexity)]
-    pub parallel_load_results: Arc<RwLock<Vec<(PathBuf, Result<gpx::Gpx, String>)>>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub parallel_load_results: Arc<tokio::sync::RwLock<Vec<(PathBuf, Result<gpx::Gpx, String>)>>>,
+    #[cfg(target_arch = "wasm32")]
+    pub parallel_load_results: Arc<std::sync::RwLock<Vec<(PathBuf, Result<gpx::Gpx, String>)>>>,
 
     /// Total number of files in current parallel load batch
-    pub parallel_total_files: Arc<RwLock<usize>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub parallel_total_files: Arc<tokio::sync::RwLock<usize>>,
+    #[cfg(target_arch = "wasm32")]
+    pub parallel_total_files: Arc<std::sync::RwLock<usize>>,
 }
 
 /// Statistics about loaded data
@@ -210,7 +220,7 @@ impl AppState {
             Ok(gpx) => {
                 // Only acquire the write lock when modifying the collection
                 let add_result = {
-                    let mut collection = self.route_collection.write().unwrap();
+                    let mut collection = futures::executor::block_on(self.route_collection.write());
                     collection
                         .add_route(gpx.clone())
                         .map_err(|e| format!("Failed to add route: {}", e))
@@ -225,13 +235,13 @@ impl AppState {
                         Ok(())
                     }
                     Err(e) => {
-                        self.file_loader.errors.push((path, e.clone()));
+                        self.file_loader.errors.push((path, e.clone().to_string()));
                         Err(e)
                     }
                 }
             }
             Err(e) => {
-                self.file_loader.errors.push((path, e.clone()));
+                self.file_loader.errors.push((path, e.clone().to_string()));
                 Err(e)
             }
         }
@@ -249,32 +259,48 @@ impl AppState {
         let total_files = self.file_loader.parallel_total_files.clone();
 
         // Set the totals and reset counters
-        *total_files.write().unwrap() = files_to_load.len();
+        let files_len = files_to_load.len();
+        let rt = tokio::runtime::Handle::try_current()
+            .expect("Must be called from within a tokio runtime");
 
-        // Spawn a dedicated thread that processes files sequentially but yields results incrementally.
-        // This avoids saturating all CPU cores during parsing, keeping UI responsive.
-        // Each file is parsed one at a time and immediately pushed to results for the UI to consume.
-        std::thread::spawn(move || {
-            for path in files_to_load {
-                let result = (|| -> Result<gpx::Gpx, String> {
-                    let file = std::fs::File::open(&path)
-                        .map_err(|e| format!("Failed to open file: {}", e))?;
-                    let reader = std::io::BufReader::new(file);
-                    gpx::read(reader).map_err(|e| format!("Failed to parse GPX: {}", e))
-                })();
+        rt.spawn({
+            let results = results.clone();
+            let total_files = total_files.clone();
+            async move {
+                {
+                    let mut total_files_lock = total_files.write().await;
+                    *total_files_lock = files_len;
+                }
+                for path in files_to_load {
+                    let result = (|| async {
+                        use tokio::io::AsyncReadExt;
+                        let file = tokio::fs::File::open(&path)
+                            .await
+                            .map_err(|e| format!("Failed to open file: {}", e))?;
+                        let mut reader = tokio::io::BufReader::new(file);
+                        let mut buf = Vec::new();
+                        reader
+                            .read_to_end(&mut buf)
+                            .await
+                            .map_err(|e| format!("Failed to read file: {}", e))?;
+                        let cursor = std::io::Cursor::new(buf);
+                        gpx::read(cursor).map_err(|e| format!("Failed to parse GPX: {}", e))
+                    })()
+                    .await;
 
-                // Push result immediately so UI can process it while we parse the next file
-                results.write().unwrap().push((path, result));
-
-                // Small yield to allow other threads to run (helps UI responsiveness)
-                std::thread::yield_now();
+                    // Push result immediately so UI can process it while we parse the next file
+                    let mut results_lock = results.write().await;
+                    results_lock.push((path, result));
+                    // Yield to allow other tasks to run (helps UI responsiveness)
+                    tokio::task::yield_now().await;
+                }
             }
         });
     }
 
     /// Start parallel loading (WASM fallback - sequential)
     #[cfg(target_arch = "wasm32")]
-    pub fn start_parallel_load(&mut self) {
+    pub async fn start_parallel_load(&mut self) {
         // On WASM, just process one at a time in the main loop
         // The pending_files will be processed by process_pending_files
     }
@@ -284,7 +310,11 @@ impl AppState {
     /// Returns true if there are more results to process.
     pub fn process_parallel_results(&mut self) -> bool {
         // Check if we're done (all added)
-        let total = *self.file_loader.parallel_total_files.read().unwrap();
+        let total = match self.file_loader.parallel_total_files.try_read() {
+            Ok(guard) => *guard,
+            Err(_) => 0,
+        };
+
         let added = self.file_loader.loaded_files.len() + self.file_loader.errors.len();
         if total > 0 && added >= total {
             self.reset_parallel_loading();
@@ -294,11 +324,14 @@ impl AppState {
         // Process exactly one result per frame to keep UI fluid during indexing
         // Take one result (non-blocking)
         let result: Option<(PathBuf, Result<gpx::Gpx, String>)> = {
-            let mut results_lock = self.file_loader.parallel_load_results.write().unwrap();
-            if results_lock.is_empty() {
-                None
+            if let Ok(mut results_lock) = self.file_loader.parallel_load_results.try_write() {
+                if results_lock.is_empty() {
+                    None
+                } else {
+                    Some(results_lock.remove(0))
+                }
             } else {
-                Some(results_lock.remove(0))
+                None
             }
         };
 
@@ -311,8 +344,13 @@ impl AppState {
             Ok(gpx) => {
                 // Add this single route to the collection
                 let add_result = {
-                    let mut collection = self.route_collection.write().unwrap();
-                    collection.add_route(gpx.clone())
+                    if let Ok(mut collection) = self.route_collection.try_write() {
+                        collection.add_route(gpx.clone())
+                    } else {
+                        Err(large_track_lib::DataError::InvalidGeometry(
+                            "Could not acquire write lock on route_collection".to_string(),
+                        ))
+                    }
                 };
 
                 match add_result {
@@ -336,30 +374,36 @@ impl AppState {
         }
 
         // Return true if there are more results to process or still loading
-        !self
-            .file_loader
-            .parallel_load_results
-            .read()
-            .unwrap()
-            .is_empty()
-            || self.is_parallel_loading()
+        let more_results = match self.file_loader.parallel_load_results.try_read() {
+            Ok(results_lock) => !results_lock.is_empty(),
+            Err(_) => false,
+        };
+        more_results || self.is_parallel_loading()
     }
 
     /// Check if parallel loading is in progress
     pub fn is_parallel_loading(&self) -> bool {
-        let total = *self.file_loader.parallel_total_files.read().unwrap();
+        let total = match self.file_loader.parallel_total_files.try_read() {
+            Ok(guard) => *guard,
+            Err(_) => 0,
+        };
         let processed = self.file_loader.loaded_files.len() + self.file_loader.errors.len();
         total > 0 && processed < total
     }
 
     /// Reset parallel loading state (called when all routes are added)
     fn reset_parallel_loading(&mut self) {
-        *self.file_loader.parallel_total_files.write().unwrap() = 0;
+        futures::executor::block_on(self.file_loader.parallel_total_files.write())
+            .clone_from(&mut 0);
+        // WASM-specific code removed; async version is now used everywhere.
     }
 
     /// Get loading progress (0.0 to 1.0)
     pub fn loading_progress(&self) -> f32 {
-        let total = *self.file_loader.parallel_total_files.read().unwrap();
+        let total = match self.file_loader.parallel_total_files.try_read() {
+            Ok(guard) => *guard,
+            Err(_) => 0,
+        };
         let processed = self.file_loader.loaded_files.len() + self.file_loader.errors.len();
         if total == 0 {
             0.0
@@ -370,7 +414,10 @@ impl AppState {
 
     /// Get loading status text
     pub fn loading_status(&self) -> String {
-        let total = *self.file_loader.parallel_total_files.read().unwrap();
+        let total = match self.file_loader.parallel_total_files.try_read() {
+            Ok(guard) => *guard,
+            Err(_) => 0,
+        };
         let processed = self.file_loader.loaded_files.len() + self.file_loader.errors.len();
         if processed < total {
             format!("{}/{}", processed, total)
@@ -421,7 +468,10 @@ impl AppState {
         profiling::scope!("rebuild_collection");
 
         // Create new collection with updated bias
-        let old_config = self.route_collection.read().unwrap().config().clone();
+        let old_config = match self.route_collection.try_read() {
+            Ok(guard) => guard.config().clone(),
+            Err(_) => return, // Skip if lock is not available
+        };
         let config = Config { bias, ..old_config };
         let mut new_collection = RouteCollection::new(config);
 
@@ -438,17 +488,21 @@ impl AppState {
     pub fn update_stats(&mut self) {
         profiling::scope!("update_stats");
 
-        let collection = self.route_collection.read().unwrap();
-        let info = collection.get_info();
+        if let Ok(collection) = self.route_collection.try_read() {
+            let info = collection.get_info();
 
-        self.stats.route_count = info.route_count;
-        self.stats.total_points = info.total_points;
-        self.stats.total_distance = info.total_distance_meters;
+            self.stats.route_count = info.route_count;
+            self.stats.total_points = info.total_points;
+            self.stats.total_distance = info.total_distance_meters;
+        }
     }
 
     /// Clear all loaded routes
     pub fn clear_routes(&mut self) {
-        let config = self.route_collection.read().unwrap().config().clone();
+        let config = match self.route_collection.try_read() {
+            Ok(guard) => guard.config().clone(),
+            Err(_) => return, // Skip if lock is not available
+        };
         self.route_collection = Arc::new(RwLock::new(RouteCollection::new(config)));
         self.file_loader.loaded_files.clear();
         self.file_loader.errors.clear();
@@ -534,7 +588,10 @@ impl Default for UiSettings {
 impl FileLoader {
     /// Check if any files are being processed
     pub fn is_busy(&self) -> bool {
-        let total = *self.parallel_total_files.read().unwrap();
+        let total = match self.parallel_total_files.try_read() {
+            Ok(guard) => *guard,
+            Err(_) => 0,
+        };
         let processed = self.loaded_files.len() + self.errors.len();
         self.loading_file.is_some()
             || !self.pending_files.is_empty()

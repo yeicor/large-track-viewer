@@ -5,7 +5,8 @@
 
 use egui::{Color32, Stroke};
 use large_track_lib::{RouteCollection, SimplifiedSegment};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use walkers::{Plugin, Projector};
 
 /// Statistics from the last render pass
@@ -188,8 +189,11 @@ impl Plugin for TrackPlugin {
             let screen_size = (viewport_rect.width() as f64, viewport_rect.height() as f64);
             let segments: Vec<SimplifiedSegment> = {
                 profiling::scope!("query_visible");
-                let collection = self.collection.read().unwrap();
-                collection.query_visible(viewport, screen_size)
+                if let Ok(collection) = self.collection.try_read() {
+                    collection.query_visible(viewport, screen_size)
+                } else {
+                    Vec::new()
+                }
             };
 
             // Render all visible segments and count points
@@ -203,9 +207,10 @@ impl Plugin for TrackPlugin {
 
             // Update shared statistics
             {
-                let mut stats = self.stats.write().unwrap();
-                stats.segments_rendered = segments.len();
-                stats.simplified_points_rendered = total_points;
+                if let Ok(mut stats) = self.stats.try_write() {
+                    stats.segments_rendered = segments.len();
+                    stats.simplified_points_rendered = total_points;
+                }
             }
         }
     }
