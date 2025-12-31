@@ -154,17 +154,18 @@ jobs:
         with:
           tool: trunk@0.21.14
 
-      - run: trunk build crates/eframe-entrypoints/web/index.html --locked --release
+      - run: trunk build ../eframe-entrypoints/web/index.html --locked --release
+        working-directory: crates/large-track-viewer
 
       - run: |
-          cd dist
-          tar -czf ../large-track-viewer-web.tar.gz *
-          cd ..
+          cd crates/large-track-viewer/dist
+          tar -czf ../../../large-track-viewer-web.tar.gz *
+          cd ../../..
 
       - uses: actions/upload-artifact@v4
         with:
           name: large-track-viewer-web
-          path: dist
+          path: crates/large-track-viewer/dist
 
       - if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
@@ -175,7 +176,7 @@ jobs:
       - if: startsWith(github.ref, 'refs/tags/')
         uses: actions/deploy-pages@v4
         with:
-          artifact: dist
+          artifact: crates/large-track-viewer/dist
 
   build-android:
     needs: [sync-version]
@@ -200,7 +201,7 @@ jobs:
 
       - run: sudo apt-get update && sudo apt-get install -y llvm # llvm-ar needed
 
-      - run: x build --package large-track-viewer --features android --platform android --arch arm64 --format apk --release
+      - run: x build --manifest-path crates/large-track-viewer/Cargo.toml --features android --platform android --arch arm64 --format apk --release
 
       - run: find target -name "*.apk" -type f -exec cp {} large-track-viewer.apk \;
 
