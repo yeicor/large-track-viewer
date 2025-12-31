@@ -331,7 +331,6 @@ impl AppState {
                     match add_result {
                         Ok(_) => {
                             self.file_loader.loaded_files.push((path, gpx));
-                            *self.file_loader.parallel_added_files.write().unwrap() += 1;
                             self.update_stats();
                             self.pending_fit_bounds = true;
                         }
@@ -341,9 +340,13 @@ impl AppState {
                                 .push((path, format!("Failed to add route: {}", e)));
                         }
                     }
+                    // Count this file as processed (whether success or error)
+                    *self.file_loader.parallel_added_files.write().unwrap() += 1;
                 }
                 Err(e) => {
                     self.file_loader.errors.push((path, e));
+                    // Count parse errors as processed too
+                    *self.file_loader.parallel_added_files.write().unwrap() += 1;
                 }
             }
         }

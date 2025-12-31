@@ -1,5 +1,5 @@
 use clap::Parser;
-use egui_eframe_entrypoints::parse_args;
+use eframe_entrypoints::parse_args;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug, Clone)]
@@ -27,11 +27,11 @@ pub struct Settings {
     pub reference_viewport_height: u32,
 
     /// Track line width in pixels
-    #[clap(long, default_value = "1.0")]
+    #[clap(long, default_value = "2.0")]
     pub line_width: f32,
 
     /// Show outline/border around tracks for better visibility
-    #[clap(long, default_value = "false")]
+    #[clap(long, default_value = "true")]
     pub show_outline: bool,
 
     /// Ignore previously persisted state and start fresh

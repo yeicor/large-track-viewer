@@ -7,9 +7,7 @@ mod app;
 
 pub use app::LargeTrackViewerApp;
 
-// Entry point for Android
-#[cfg(target_os = "android")]
-#[unsafe(no_mangle)]
-fn android_main(app: winit::platform::android::activity::AndroidApp) {
-    egui_eframe_entrypoints::android_main(app, |cc| Box::new(LargeTrackViewerApp::new(cc)));
-}
+// Define all platform entry points using the unified macro
+eframe_entrypoints::eframe_app!("Large Track Viewer", |cc| Box::new(
+    LargeTrackViewerApp::new(cc)
+));

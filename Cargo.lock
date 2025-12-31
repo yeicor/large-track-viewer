@@ -1220,6 +1220,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "eframe-entrypoints"
+version = "0.1.0"
+dependencies = [
+ "android_logger",
+ "clap",
+ "console_error_panic_hook",
+ "eframe",
+ "egui",
+ "log",
+ "open",
+ "profiling",
+ "shadow-rs",
+ "tokio",
+ "tracing",
+ "tracing-chrome",
+ "tracing-subscriber",
+ "tracing-wasm",
+ "wasm-bindgen",
+ "web-sys",
+ "winit",
+]
+
+[[package]]
 name = "egui"
 version = "0.33.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1237,27 +1260,6 @@ dependencies = [
  "serde",
  "smallvec",
  "unicode-segmentation",
-]
-
-[[package]]
-name = "egui-eframe-entrypoints"
-version = "0.1.0"
-dependencies = [
- "android_logger",
- "clap",
- "eframe",
- "egui",
- "log",
- "open",
- "profiling",
- "shadow-rs",
- "tokio",
- "tracing",
- "tracing-chrome",
- "tracing-subscriber",
- "wasm-bindgen",
- "web-sys",
- "winit",
 ]
 
 [[package]]
@@ -2640,8 +2642,8 @@ dependencies = [
  "clap",
  "console_error_panic_hook",
  "eframe",
+ "eframe-entrypoints",
  "egui",
- "egui-eframe-entrypoints",
  "geo",
  "gpx",
  "instant",

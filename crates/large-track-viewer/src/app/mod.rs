@@ -169,16 +169,31 @@ impl LargeTrackViewerApp {
             show_profiling: settings.show_profiling,
         };
 
-        // Queue files for reloading
-        let mut pending_files: Vec<std::path::PathBuf> = settings
-            .loaded_file_paths
-            .iter()
-            .map(std::path::PathBuf::from)
-            .filter(|p| p.exists())
-            .collect();
+        // Queue files for reloading (persisted + CLI), deduplicating by canonical path
+        let mut pending_files: Vec<std::path::PathBuf> = Vec::new();
+        let mut seen_paths: std::collections::HashSet<std::path::PathBuf> =
+            std::collections::HashSet::new();
 
-        // Add CLI files
-        pending_files.extend(cli_args.gpx_files.clone());
+        // Helper to add files with deduplication
+        let mut add_file = |path: std::path::PathBuf| {
+            if path.exists() {
+                // Use canonical path to detect duplicates regardless of relative/absolute paths
+                let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+                if seen_paths.insert(canonical) {
+                    pending_files.push(path);
+                }
+            }
+        };
+
+        // Add persisted files first
+        for path_str in &settings.loaded_file_paths {
+            add_file(std::path::PathBuf::from(path_str));
+        }
+
+        // Add CLI files (will be deduplicated if already in persisted)
+        for path in &cli_args.gpx_files {
+            add_file(path.clone());
+        }
 
         let config = Config {
             bias: settings.bias,
@@ -229,7 +244,7 @@ impl LargeTrackViewerApp {
             let max_span = lat_span.max(lon_span);
 
             let zoom = if max_span > 0.0 {
-                let zoom_estimate = (360.0 / max_span).log2();
+                let zoom_estimate = (4.0 * 360.0 / max_span).log2();
                 (zoom_estimate - 0.5).clamp(1.0, 18.0)
             } else {
                 12.0
@@ -239,7 +254,7 @@ impl LargeTrackViewerApp {
                 .center_at(walkers::lat_lon(center_lat, center_lon));
             let _ = self.map_memory.set_zoom(zoom);
 
-            tracing::info!(
+            tracing::trace!(
                 "Auto-zoomed to bounds: ({:.4}, {:.4}) - ({:.4}, {:.4}), zoom: {:.1}",
                 min_lat,
                 min_lon,

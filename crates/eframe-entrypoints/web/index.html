@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta
+            name="viewport"
+            content="width=device-width, initial-scale=1.0, user-scalable=no"
+        />
+        <title>Large Track Viewer</title>
+        <link
+            data-trunk
+            rel="rust"
+            href="../../large-track-viewer"
+            data-target-name="large-track-viewer"
+            data-cargo-no-default-features
+            data-cargo-features="web"
+            data-wasm-opt="z"
+            data-wasm-opt-params="--all-features"
+        />
+        <link data-trunk rel="css" href="style.css" />
+    </head>
+    <body
+        data-github-repo="Yeicor/large-track-viewer"
+        data-app-name="Large Track Viewer"
+    >
+        <canvas id="the_canvas_id"></canvas>
+        <div
+            class="centered"
+            id="center_text"
+            aria-live="polite"
+            aria-busy="true"
+        >
+            <div class="lds-dual-ring"></div>
+            <h1>Large Track Viewer</h1>
+            <p>Loading application…</p>
+        </div>
+        <div class="footer" id="footer_text">
+            &copy; <span id="footer_year"></span> Large Track Viewer &mdash;
+            Made with &#10084; by
+            <a
+                href="https://github.com/Yeicor"
+                target="_blank"
+                rel="noopener"
+                style="
+                    color: inherit;
+                    text-decoration: underline;
+                    pointer-events: auto;
+                "
+                >Yeicor</a
+            >
+        </div>
+
+        <!-- Native app download banner -->
+        <div
+            id="native-app-banner"
+            class="native-app-banner"
+            style="display: none"
+        >
+            <div class="native-app-banner-content">
+                <span class="native-app-banner-icon">🚀</span>
+                <span class="native-app-banner-text">
+                    Get better performance with the native app!
+                </span>
+                <a
+                    id="native-app-download-link"
+                    href="#"
+                    target="_blank"
+                    rel="noopener"
+                    class="native-app-banner-btn"
+                >
+                    Download
+                </a>
+                <button
+                    id="native-app-banner-dismiss"
+                    class="native-app-banner-close"
+                    aria-label="Dismiss"
+                >
+                    ✕
+                </button>
+            </div>
+        </div>
+
+        <script data-trunk src="app.js" type="module"></script>
+    </body>
+</html>

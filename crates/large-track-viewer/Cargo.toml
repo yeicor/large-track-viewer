@@ -12,15 +12,15 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 default = ["native", "profiling"]
-native = ["egui-eframe-entrypoints/native"]
-web = ["egui-eframe-entrypoints/web"]
-android = ["egui-eframe-entrypoints/android"]
-profiling = ["egui-eframe-entrypoints/profiling"]
+native = ["eframe-entrypoints/native"]
+web = ["eframe-entrypoints/web"]
+android = ["eframe-entrypoints/android"]
+profiling = ["eframe-entrypoints/profiling"]
 
 [dependencies]
 # === Local crates ===
 large-track-lib = { path = "../large-track-lib", features = ["serde"] }
-egui-eframe-entrypoints = { path = "../egui-eframe-entrypoints" }
+eframe-entrypoints = { path = "../eframe-entrypoints" }
 
 # === UI Framework ===
 eframe.workspace = true

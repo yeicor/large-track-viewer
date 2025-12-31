@@ -154,7 +154,7 @@ jobs:
         with:
           tool: trunk@0.21.14
 
-      - run: trunk build src/entrypoints/index.html --locked --release
+      - run: trunk build crates/eframe-entrypoints/web/index.html --locked --release
 
       - run: |
           cd dist
@@ -200,7 +200,7 @@ jobs:
 
       - run: sudo apt-get update && sudo apt-get install -y llvm # llvm-ar needed
 
-      - run: x build --features android --platform android --arch arm64 --format apk --release
+      - run: x build --package large-track-viewer --features android --platform android --arch arm64 --format apk --release
 
       - run: find target -name "*.apk" -type f -exec cp {} large-track-viewer.apk \;
 

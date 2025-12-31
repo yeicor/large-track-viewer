@@ -447,7 +447,7 @@ fn render_settings_tab(ui: &mut Ui, state: &mut AppState) {
     ui.checkbox(&mut state.ui_settings.show_profiling, "Show profiling data");
     if state.ui_settings.show_profiling {
         ui.add_space(4.0);
-        egui_eframe_entrypoints::profiling_ui(ui);
+        eframe_entrypoints::profiling_ui(ui);
     }
 
     ui.add_space(12.0);
