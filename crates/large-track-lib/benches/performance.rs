@@ -4,7 +4,7 @@
 //!
 //! Reduced benchmark suite for faster iteration during optimization.
 
-use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use geo::{Coord, Point, Rect};
 use gpx::{Gpx, Track, TrackSegment, Waypoint};
 use large_track_lib::{Config, RouteCollection};
@@ -79,16 +79,47 @@ fn bench_query_performance(c: &mut Criterion) {
     let mut collection = RouteCollection::new(config);
     collection.add_route(gpx).unwrap();
 
-    // Small viewport (detailed view)
-    let small_viewport = create_viewport(51.50, -0.11, 51.51, -0.10);
+    // Small viewport (detailed view) - adjusted to ensure it contains part of the track
+    // Track spans lat: 51.5 to ~51.6, lon: -0.1 to ~0.0
+    let small_viewport = create_viewport(51.50, -0.12, 51.55, -0.05);
+
+    // Sanity check: ensure query returns results
+    let sanity_results = collection.query_visible(small_viewport);
+    assert!(
+        !sanity_results.is_empty(),
+        "Small viewport should return results - got {} segments",
+        sanity_results.len()
+    );
+
     group.bench_function("small_viewport_50k", |b| {
         b.iter(|| collection.query_visible(small_viewport));
     });
 
+    // Small viewport with dynamic screen size adjustment
+    let screen_size = (1920.0, 1080.0);
+    group.bench_function("small_viewport_50k_dynamic", |b| {
+        b.iter(|| collection.query_visible_with_screen_size(small_viewport, screen_size));
+    });
+
     // Large viewport (overview)
     let large_viewport = create_viewport(50.0, -2.0, 53.0, 1.0);
+
+    // Sanity check
+    let sanity_results = collection.query_visible(large_viewport);
+    assert!(
+        !sanity_results.is_empty(),
+        "Large viewport should return results - got {} segments",
+        sanity_results.len()
+    );
+
     group.bench_function("large_viewport_50k", |b| {
         b.iter(|| collection.query_visible(large_viewport));
+    });
+
+    // Large viewport with dynamic screen size (4K display)
+    let screen_size_4k = (3840.0, 2160.0);
+    group.bench_function("large_viewport_50k_4k", |b| {
+        b.iter(|| collection.query_visible_with_screen_size(large_viewport, screen_size_4k));
     });
 
     group.finish();

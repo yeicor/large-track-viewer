@@ -34,6 +34,8 @@ struct RawSegment {
     segment_index: usize,
     /// Mercator coordinates of all points (cached to avoid recomputation)
     mercator_points: Arc<Vec<Point<f64>>>,
+    /// Cached bounding box of mercator_points
+    bounding_box: Rect<f64>,
     /// Optional mapping from chunk indices to original segment indices
     /// (used when this is a chunked portion of a larger segment)
     original_indices: Option<Arc<Vec<usize>>>,
@@ -133,12 +135,16 @@ impl Quadtree {
                     .map(|wp| utils::wgs84_to_mercator(wp.point().y(), wp.point().x()))
                     .collect();
 
+                // Compute bounding box once
+                let bounding_box = compute_segment_bbox(&mercator_points);
+
                 let raw_segment = RawSegment {
                     route: route.clone(),
                     route_index,
                     track_index: track_idx,
                     segment_index: segment_idx,
                     mercator_points: Arc::new(mercator_points),
+                    bounding_box,
                     original_indices: None, // Full segment, no remapping needed
                 };
 
@@ -177,14 +183,52 @@ impl Quadtree {
     ///
     /// Returns segments at the appropriate LOD level for the given viewport size.
     /// Simplification is done lazily and cached, and results are clipped to the viewport.
+    ///
+    /// Uses the reference pixel viewport configured at construction time for LOD calculations.
     #[inline]
     pub fn query(&self, geo_viewport: Rect<f64>) -> Vec<SimplifiedSegment> {
+        self.query_with_screen_size(geo_viewport, None)
+    }
+
+    /// Query for segments intersecting the viewport with dynamic LOD adjustment
+    ///
+    /// Returns segments at the appropriate LOD level for the given viewport size.
+    /// Simplification is done lazily and cached, and results are clipped to the viewport.
+    ///
+    /// # Arguments
+    /// * `geo_viewport` - The geographic viewport in Web Mercator coordinates
+    /// * `current_screen_size` - Optional current screen size (width, height) in pixels.
+    ///   If provided, the LOD tolerance is adjusted based on the ratio of current screen
+    ///   to the reference viewport, ensuring consistent visual quality across screen sizes.
+    ///   A bias of 1.0 will produce similar visual results regardless of screen resolution.
+    #[inline]
+    pub fn query_with_screen_size(
+        &self,
+        geo_viewport: Rect<f64>,
+        current_screen_size: Option<(f64, f64)>,
+    ) -> Vec<SimplifiedSegment> {
         let target_level = self.calculate_target_level(geo_viewport);
-        let target_tolerance = QuadtreeNode::calculate_pixel_tolerance(
+
+        // Calculate base tolerance using reference viewport
+        let base_tolerance = QuadtreeNode::calculate_pixel_tolerance(
             target_level,
             self.reference_pixel_viewport,
             self.bias,
         );
+
+        // Adjust tolerance based on actual screen size if provided
+        // This ensures consistent visual quality across different screen resolutions
+        let target_tolerance = if let Some((screen_width, screen_height)) = current_screen_size {
+            let reference_area =
+                self.reference_pixel_viewport.width() * self.reference_pixel_viewport.height();
+            let current_area = screen_width * screen_height;
+            // Scale tolerance: larger screens need lower tolerance (more detail)
+            // Use sqrt because tolerance is linear while area is quadratic
+            let scale = (reference_area / current_area).sqrt();
+            base_tolerance * scale
+        } else {
+            base_tolerance
+        };
 
         let mut raw_results = Vec::new();
         self.root.query_segments(geo_viewport, &mut raw_results);
@@ -252,20 +296,34 @@ impl Quadtree {
         };
 
         // Try to get simplified indices from cache first using DashMap (lock-free)
-        let simplified_indices_arc = self
-            .simplification_cache
-            .entry(cache_key)
-            .or_insert_with(|| {
-                // Not in cache, compute it
-                let indices = simplify_vw_indices_fast(&raw.mercator_points, tolerance);
-                Arc::new(indices)
-            })
-            .clone();
+        // Use get() first as it's faster for cache hits (no entry creation overhead)
+        let simplified_indices_arc = if let Some(cached) = self.simplification_cache.get(&cache_key)
+        {
+            cached.clone()
+        } else {
+            // Not in cache, compute and insert
+            let indices = simplify_vw_indices_fast(&raw.mercator_points, tolerance);
+            let arc = Arc::new(indices);
+            self.simplification_cache.insert(cache_key, arc.clone());
+            arc
+        };
 
-        // Now clip the simplified indices to only include points in/near the viewport
-        // This returns multiple runs to handle discontinuities (exit and re-enter viewport)
-        let clipped_runs =
-            clip_indices_to_viewport_runs(&simplified_indices_arc, &raw.mercator_points, viewport);
+        // Fast path: check if segment bounding box is entirely within viewport
+        // In this case, we can skip clipping entirely (uses cached bbox)
+        let fully_contained = raw.bounding_box.min().x >= viewport.min().x
+            && raw.bounding_box.max().x <= viewport.max().x
+            && raw.bounding_box.min().y >= viewport.min().y
+            && raw.bounding_box.max().y <= viewport.max().y;
+
+        let clipped_runs = if fully_contained {
+            // Skip clipping - all simplified points are visible
+            let mut runs = SmallVec::new();
+            runs.push(simplified_indices_arc.iter().copied().collect());
+            runs
+        } else {
+            // Need to clip to viewport
+            clip_indices_to_viewport_runs(&simplified_indices_arc, &raw.mercator_points, viewport)
+        };
 
         // Early return if no visible runs
         if clipped_runs.is_empty() {
@@ -285,7 +343,7 @@ impl Quadtree {
                     raw.track_index,
                     raw.segment_index,
                     0..segment_len,
-                    final_indices,
+                    final_indices.into_vec(),
                 ));
             }
         }
@@ -524,12 +582,16 @@ impl QuadtreeNode {
             return None;
         }
 
+        // Compute bounding box for the chunk
+        let chunk_bbox = compute_segment_bbox(&deduped_points);
+
         Some(RawSegment {
             route: segment.route.clone(),
             route_index: segment.route_index,
             track_index: segment.track_index,
             segment_index: segment.segment_index,
             mercator_points: Arc::new(deduped_points),
+            bounding_box: chunk_bbox,
             // Store the original indices so we can map back for rendering
             original_indices: Some(Arc::new(deduped_indices)),
         })
@@ -655,7 +717,8 @@ impl QuadtreeNode {
         // Reserve space to reduce reallocations
         results.reserve(self.raw_segments.len());
         for segment in &self.raw_segments {
-            if segment_intersects_viewport(&segment.mercator_points, viewport) {
+            // Fast path: use cached bounding box for quick rejection/acceptance
+            if segment_bbox_intersects_viewport(&segment.bounding_box, viewport) {
                 results.push(segment);
             }
         }
@@ -766,32 +829,18 @@ fn line_intersects_rect(p1: Point<f64>, p2: Point<f64>, rect: Rect<f64>) -> bool
     false
 }
 
-/// Check if a segment (as a list of points) intersects a viewport rectangle
-#[inline]
-fn segment_intersects_viewport(points: &[Point<f64>], viewport: Rect<f64>) -> bool {
-    if points.is_empty() {
-        return false;
-    }
-
+/// Check if a segment's bounding box intersects a viewport rectangle
+/// This is a fast approximation - may return true for segments that don't actually intersect,
+/// but never returns false for segments that do intersect.
+#[inline(always)]
+fn segment_bbox_intersects_viewport(bbox: &Rect<f64>, viewport: Rect<f64>) -> bool {
+    let bmin = bbox.min();
+    let bmax = bbox.max();
     let vmin = viewport.min();
     let vmax = viewport.max();
 
-    // Check if any point is inside the viewport
-    for point in points {
-        if point.x() >= vmin.x && point.x() <= vmax.x && point.y() >= vmin.y && point.y() <= vmax.y
-        {
-            return true;
-        }
-    }
-
-    // Check if any line segment crosses the viewport
-    for i in 0..points.len().saturating_sub(1) {
-        if line_intersects_rect(points[i], points[i + 1], viewport) {
-            return true;
-        }
-    }
-
-    false
+    // Check for intersection (not disjoint)
+    !(bmax.x < vmin.x || bmin.x > vmax.x || bmax.y < vmin.y || bmin.y > vmax.y)
 }
 
 /// Fast O(n) simplification using Visvalingam-Whyatt that directly returns indices
@@ -815,11 +864,45 @@ fn simplify_vw_indices_fast(points: &[Point<f64>], tolerance: f64) -> Vec<usize>
     linestring.simplify_vw_idx(tolerance)
 }
 
+/// Compute bounding box of a segment's points
+#[inline]
+fn compute_segment_bbox(points: &[Point<f64>]) -> Rect<f64> {
+    if points.is_empty() {
+        return Rect::new(Coord { x: 0.0, y: 0.0 }, Coord { x: 0.0, y: 0.0 });
+    }
+
+    let mut min_x = f64::INFINITY;
+    let mut min_y = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+
+    for p in points {
+        let x = p.x();
+        let y = p.y();
+        if x < min_x {
+            min_x = x;
+        }
+        if x > max_x {
+            max_x = x;
+        }
+        if y < min_y {
+            min_y = y;
+        }
+        if y > max_y {
+            max_y = y;
+        }
+    }
+
+    Rect::new(Coord { x: min_x, y: min_y }, Coord { x: max_x, y: max_y })
+}
+
 /// Map simplified chunk indices back to original segment indices
+/// Returns a SmallVec to avoid heap allocation for small index sets
+#[inline]
 fn map_to_original_indices(
-    simplified_indices: &[usize],
+    simplified_indices: &SmallVec<[usize; 32]>,
     original_indices: &Option<Arc<Vec<usize>>>,
-) -> Vec<usize> {
+) -> SmallVec<[usize; 32]> {
     match original_indices {
         Some(orig) => {
             // Map through the original indices
@@ -830,7 +913,7 @@ fn map_to_original_indices(
         }
         None => {
             // No mapping needed, these are already original indices
-            simplified_indices.to_vec()
+            simplified_indices.clone()
         }
     }
 }
@@ -842,6 +925,8 @@ type ClipRuns = SmallVec<[SmallVec<[usize; 32]>; 2]>;
 /// Returns multiple runs to handle discontinuities where the route exits
 /// and re-enters the viewport - each run is a continuous sequence that should be rendered
 /// as a separate polyline.
+///
+/// Optimized with batched point checks and reduced branching.
 #[inline]
 fn clip_indices_to_viewport_runs(
     simplified_indices: &[usize],
@@ -858,34 +943,84 @@ fn clip_indices_to_viewport_runs(
     let vmax_x = viewport.max().x;
     let vmax_y = viewport.max().y;
 
-    // Inline point-in-viewport check (optimized with direct coordinate access)
-    #[inline(always)]
-    fn point_in_bounds(p: &Point<f64>, vmin_x: f64, vmin_y: f64, vmax_x: f64, vmax_y: f64) -> bool {
-        p.x() >= vmin_x && p.x() <= vmax_x && p.y() >= vmin_y && p.y() <= vmax_y
+    // Batch compute viewport membership using a compact u64 bitset for small segments
+    // This is more cache-friendly than Vec<bool>
+    // Note: len must be < 64 to avoid shift overflow when computing all_mask
+    if len < 64 {
+        return clip_indices_small_bitset(
+            simplified_indices,
+            mercator_points,
+            viewport,
+            vmin_x,
+            vmin_y,
+            vmax_x,
+            vmax_y,
+        );
     }
 
-    // Pre-compute viewport membership for all points
-    let in_viewport: Vec<bool> = simplified_indices
-        .iter()
-        .map(|&idx| {
-            mercator_points
-                .get(idx)
-                .is_some_and(|p| point_in_bounds(p, vmin_x, vmin_y, vmax_x, vmax_y))
-        })
-        .collect();
+    // For larger segments (or exactly 64 which would overflow), use the standard approach with Vec<bool>
+    clip_indices_large(
+        simplified_indices,
+        mercator_points,
+        viewport,
+        vmin_x,
+        vmin_y,
+        vmax_x,
+        vmax_y,
+    )
+}
 
-    // Quick check: if all points are in viewport, return single run with all indices
-    let all_in = in_viewport.iter().all(|&v| v);
-    if all_in {
+/// Optimized clipping for segments with <= 64 points using a bitset
+#[inline]
+fn clip_indices_small_bitset(
+    simplified_indices: &[usize],
+    mercator_points: &[Point<f64>],
+    viewport: Rect<f64>,
+    vmin_x: f64,
+    vmin_y: f64,
+    vmax_x: f64,
+    vmax_y: f64,
+) -> ClipRuns {
+    let len = simplified_indices.len();
+
+    // Build bitset of points in viewport
+    let mut in_viewport_bits: u64 = 0;
+    for (i, &idx) in simplified_indices.iter().enumerate() {
+        if let Some(p) = mercator_points.get(idx) {
+            if p.x() >= vmin_x && p.x() <= vmax_x && p.y() >= vmin_y && p.y() <= vmax_y {
+                in_viewport_bits |= 1u64 << i;
+            }
+        }
+    }
+
+    // Quick check: all points in viewport
+    // Safe because len < 64 is guaranteed by the caller
+    let all_mask = (1u64 << len) - 1;
+    if in_viewport_bits == all_mask {
         let mut runs = SmallVec::new();
         runs.push(simplified_indices.iter().copied().collect());
         return runs;
     }
 
-    // Quick check: if no points in viewport, check if any lines cross
-    let any_in_viewport = in_viewport.iter().any(|&v| v);
+    // Quick check: no points in viewport - need to check line crossings
+    if in_viewport_bits == 0 {
+        let has_crossing = (0..len.saturating_sub(1)).any(|i| {
+            let idx1 = simplified_indices[i];
+            let idx2 = simplified_indices[i + 1];
+            match (mercator_points.get(idx1), mercator_points.get(idx2)) {
+                (Some(&p1), Some(&p2)) => line_intersects_rect(p1, p2, viewport),
+                _ => false,
+            }
+        });
+        if !has_crossing {
+            return SmallVec::new();
+        }
+    }
 
-    // Line crossing check (only called when needed)
+    // Helper to check if bit is set
+    let is_in = |i: usize| -> bool { (in_viewport_bits & (1u64 << i)) != 0 };
+
+    // Line crossing check
     let line_crosses = |i: usize, j: usize| -> bool {
         let idx1 = simplified_indices[i];
         let idx2 = simplified_indices[j];
@@ -895,7 +1030,93 @@ fn clip_indices_to_viewport_runs(
         }
     };
 
-    // If no points in viewport, check if any line segment crosses
+    let mut runs: ClipRuns = SmallVec::new();
+    let mut current_run: SmallVec<[usize; 32]> = SmallVec::new();
+
+    for i in 0..len {
+        let idx = simplified_indices[i];
+        let is_in_viewport = is_in(i);
+        let prev_in = i > 0 && is_in(i - 1);
+        let next_in = i + 1 < len && is_in(i + 1);
+
+        // Only check line crossing when both endpoints are outside viewport
+        let prev_line_crosses = i > 0 && !prev_in && !is_in_viewport && line_crosses(i - 1, i);
+        let next_line_crosses =
+            i + 1 < len && !next_in && !is_in_viewport && line_crosses(i, i + 1);
+
+        let prev_relevant = i > 0 && (prev_in || is_in_viewport || prev_line_crosses);
+        let next_relevant = i + 1 < len && (next_in || is_in_viewport || next_line_crosses);
+        let should_include = is_in_viewport || prev_relevant || next_relevant;
+
+        if should_include {
+            if current_run.is_empty() && i > 0 && !prev_in {
+                current_run.push(simplified_indices[i - 1]);
+            }
+            current_run.push(idx);
+
+            if i + 1 < len && !next_in && (is_in_viewport || line_crosses(i, i + 1)) {
+                current_run.push(simplified_indices[i + 1]);
+                if current_run.len() >= 2 {
+                    runs.push(std::mem::take(&mut current_run));
+                } else {
+                    current_run.clear();
+                }
+            }
+        } else if current_run.len() >= 2 {
+            runs.push(std::mem::take(&mut current_run));
+        } else {
+            current_run.clear();
+        }
+    }
+
+    if current_run.len() >= 2 {
+        runs.push(current_run);
+    }
+
+    runs
+}
+
+/// Standard clipping for larger segments
+#[inline]
+fn clip_indices_large(
+    simplified_indices: &[usize],
+    mercator_points: &[Point<f64>],
+    viewport: Rect<f64>,
+    vmin_x: f64,
+    vmin_y: f64,
+    vmax_x: f64,
+    vmax_y: f64,
+) -> ClipRuns {
+    let len = simplified_indices.len();
+
+    // Pre-compute viewport membership
+    let in_viewport: Vec<bool> = simplified_indices
+        .iter()
+        .map(|&idx| {
+            mercator_points.get(idx).is_some_and(|p| {
+                p.x() >= vmin_x && p.x() <= vmax_x && p.y() >= vmin_y && p.y() <= vmax_y
+            })
+        })
+        .collect();
+
+    // Quick checks
+    if in_viewport.iter().all(|&v| v) {
+        let mut runs = SmallVec::new();
+        runs.push(simplified_indices.iter().copied().collect());
+        return runs;
+    }
+
+    let any_in_viewport = in_viewport.iter().any(|&v| v);
+
+    let line_crosses = |i: usize, j: usize| -> bool {
+        let idx1 = simplified_indices[i];
+        let idx2 = simplified_indices[j];
+        match (mercator_points.get(idx1), mercator_points.get(idx2)) {
+            (Some(&p1), Some(&p2)) => line_intersects_rect(p1, p2, viewport),
+            _ => false,
+        }
+    };
+
     if !any_in_viewport {
         let has_crossing = (0..len.saturating_sub(1)).any(|i| line_crosses(i, i + 1));
         if !has_crossing {
@@ -909,55 +1130,38 @@ fn clip_indices_to_viewport_runs(
     for i in 0..len {
         let idx = simplified_indices[i];
         let is_in_viewport = in_viewport[i];
-
         let prev_in = i > 0 && in_viewport[i - 1];
         let next_in = i + 1 < len && in_viewport[i + 1];
 
-        // Only check line crossing when both endpoints are outside viewport
         let prev_line_crosses = i > 0 && !prev_in && !is_in_viewport && line_crosses(i - 1, i);
         let next_line_crosses =
             i + 1 < len && !next_in && !is_in_viewport && line_crosses(i, i + 1);
 
-        // Point is relevant if it or adjacent points are in viewport, or lines cross
         let prev_relevant = i > 0 && (prev_in || is_in_viewport || prev_line_crosses);
         let next_relevant = i + 1 < len && (next_in || is_in_viewport || next_line_crosses);
-
         let should_include = is_in_viewport || prev_relevant || next_relevant;
 
         if should_include {
-            // Starting a new run? Include the previous point for line continuity at entry
             if current_run.is_empty() && i > 0 && !prev_in {
                 current_run.push(simplified_indices[i - 1]);
             }
-
             current_run.push(idx);
 
-            // If next point is outside viewport, check if we should end this run
-            if i + 1 < len && !next_in {
-                let next_idx = simplified_indices[i + 1];
-                // Check if we're actually exiting (current in viewport or line crosses)
-                if is_in_viewport || line_crosses(i, i + 1) {
-                    // Include exit point
-                    current_run.push(next_idx);
-                    // End this run - route is leaving viewport
-                    if current_run.len() >= 2 {
-                        runs.push(std::mem::take(&mut current_run));
-                    } else {
-                        current_run.clear();
-                    }
+            if i + 1 < len && !next_in && (is_in_viewport || line_crosses(i, i + 1)) {
+                current_run.push(simplified_indices[i + 1]);
+                if current_run.len() >= 2 {
+                    runs.push(std::mem::take(&mut current_run));
+                } else {
+                    current_run.clear();
                 }
             }
+        } else if current_run.len() >= 2 {
+            runs.push(std::mem::take(&mut current_run));
         } else {
-            // Point not included - if we have a run, end it
-            if current_run.len() >= 2 {
-                runs.push(std::mem::take(&mut current_run));
-            } else {
-                current_run.clear();
-            }
+            current_run.clear();
         }
     }
 
-    // Don't forget the last run
     if current_run.len() >= 2 {
         runs.push(current_run);
     }
@@ -1411,12 +1615,14 @@ mod tests {
             .map(|i| Point::new(-50.0 + i as f64 * 25.0, -50.0 + i as f64 * 25.0))
             .collect();
 
+        let bbox = compute_segment_bbox(&points);
         let raw_segment = RawSegment {
             route: route.clone(),
             route_index: 0,
             track_index: 0,
             segment_index: 0,
             mercator_points: Arc::new(points),
+            bounding_box: bbox,
             original_indices: None,
         };
 

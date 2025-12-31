@@ -177,9 +177,33 @@ impl RouteCollection {
     /// The viewport should be in Web Mercator coordinates (EPSG:3857).
     /// Returns segments at the appropriate LOD level for the viewport size.
     /// Simplification is performed lazily and cached for efficiency.
+    ///
+    /// Uses the reference pixel viewport configured at construction time for LOD calculations.
     #[inline]
     pub fn query_visible(&self, geo_viewport: Rect<f64>) -> Vec<SimplifiedSegment> {
         self.quadtree.query(geo_viewport)
+    }
+
+    /// Query for visible segments with dynamic LOD adjustment based on screen size
+    ///
+    /// The viewport should be in Web Mercator coordinates (EPSG:3857).
+    /// Returns segments at the appropriate LOD level for the viewport size.
+    /// Simplification is performed lazily and cached for efficiency.
+    ///
+    /// # Arguments
+    /// * `geo_viewport` - The geographic viewport in Web Mercator coordinates
+    /// * `screen_size` - Current screen size (width, height) in pixels.
+    ///   The LOD tolerance is adjusted based on the ratio of current screen
+    ///   to the reference viewport, ensuring consistent visual quality across screen sizes.
+    ///   A bias of 1.0 will produce similar visual results regardless of screen resolution.
+    #[inline]
+    pub fn query_visible_with_screen_size(
+        &self,
+        geo_viewport: Rect<f64>,
+        screen_size: (f64, f64),
+    ) -> Vec<SimplifiedSegment> {
+        self.quadtree
+            .query_with_screen_size(geo_viewport, Some(screen_size))
     }
 
     /// Get total number of routes
@@ -627,6 +651,129 @@ mod tests {
         // Center should be around London
         assert!(lat > 51.0 && lat < 52.0);
         assert!(lon > -1.0 && lon < 1.0);
+    }
+
+    #[test]
+    fn test_query_visible_with_screen_size() {
+        let config = Config::default();
+        let mut collection = RouteCollection::new(config);
+
+        let gpx = create_test_gpx();
+        collection.add_route(gpx).unwrap();
+
+        // Query with a viewport that should contain the route
+        use crate::utils::wgs84_to_mercator;
+        let min = wgs84_to_mercator(51.5, -0.2);
+        let max = wgs84_to_mercator(51.6, -0.0);
+        let viewport = Rect::new(
+            geo::Coord {
+                x: min.x(),
+                y: min.y(),
+            },
+            geo::Coord {
+                x: max.x(),
+                y: max.y(),
+            },
+        );
+
+        // Test with different screen sizes
+        let small_screen = (800.0, 600.0);
+        let large_screen = (3840.0, 2160.0); // 4K
+
+        let results_small = collection.query_visible_with_screen_size(viewport, small_screen);
+        let results_large = collection.query_visible_with_screen_size(viewport, large_screen);
+
+        // Both should return results
+        assert!(!results_small.is_empty());
+        assert!(!results_large.is_empty());
+
+        // Regular query should also work
+        let results_default = collection.query_visible(viewport);
+        assert!(!results_default.is_empty());
+    }
+
+    #[test]
+    fn test_query_with_many_points_segment() {
+        // Test that segments with exactly 64 points don't cause overflow
+        let config = Config::default();
+        let mut collection = RouteCollection::new(config);
+
+        // Create a route with exactly 64 points
+        let mut gpx = Gpx::default();
+        let mut track = Track::default();
+        let mut segment = TrackSegment::default();
+
+        for i in 0..64 {
+            segment.points.push(create_test_waypoint(
+                51.5074 + i as f64 * 0.0001,
+                -0.1278 + i as f64 * 0.0001,
+            ));
+        }
+
+        track.segments.push(segment);
+        gpx.tracks.push(track);
+
+        collection.add_route(gpx).unwrap();
+
+        // Query should not panic
+        use crate::utils::wgs84_to_mercator;
+        let min = wgs84_to_mercator(51.5, -0.2);
+        let max = wgs84_to_mercator(51.6, -0.0);
+        let viewport = Rect::new(
+            geo::Coord {
+                x: min.x(),
+                y: min.y(),
+            },
+            geo::Coord {
+                x: max.x(),
+                y: max.y(),
+            },
+        );
+
+        let results = collection.query_visible(viewport);
+        assert!(!results.is_empty());
+    }
+
+    #[test]
+    fn test_query_with_more_than_64_points_segment() {
+        // Test that segments with more than 64 points work correctly
+        let config = Config::default();
+        let mut collection = RouteCollection::new(config);
+
+        // Create a route with 100 points
+        let mut gpx = Gpx::default();
+        let mut track = Track::default();
+        let mut segment = TrackSegment::default();
+
+        for i in 0..100 {
+            segment.points.push(create_test_waypoint(
+                51.5074 + i as f64 * 0.0001,
+                -0.1278 + i as f64 * 0.0001,
+            ));
+        }
+
+        track.segments.push(segment);
+        gpx.tracks.push(track);
+
+        collection.add_route(gpx).unwrap();
+
+        // Query should not panic
+        use crate::utils::wgs84_to_mercator;
+        let min = wgs84_to_mercator(51.5, -0.2);
+        let max = wgs84_to_mercator(51.6, -0.0);
+        let viewport = Rect::new(
+            geo::Coord {
+                x: min.x(),
+                y: min.y(),
+            },
+            geo::Coord {
+                x: max.x(),
+                y: max.y(),
+            },
+        );
+
+        let results = collection.query_visible(viewport);
+        assert!(!results.is_empty());
     }
 
     #[test]
