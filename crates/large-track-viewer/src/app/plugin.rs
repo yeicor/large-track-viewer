@@ -90,17 +90,8 @@ impl TrackPlugin {
         projector: &Projector,
         painter: &egui::Painter,
     ) -> usize {
-        use std::hash::Hasher;
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        let name = segment
-            .route
-            .gpx_data()
-            .metadata
-            .as_ref()
-            .and_then(|m| m.name.as_deref())
-            .unwrap_or("");
-        hasher.write(name.as_bytes());
-        let color = Self::get_route_color(hasher.finish() as usize);
+        // Use route_index as a stable, cheap color seed (avoids hashing metadata string)
+        let color = Self::get_route_color(segment.route_index);
 
         // Inner stroke with the route color
         let inner_stroke = Stroke::new(self.width, color);
@@ -117,15 +108,14 @@ impl TrackPlugin {
             }
 
             // Convert WGS84 coordinates to screen space
-            let screen_points: Vec<egui::Pos2> = points
-                .iter()
-                .map(|waypoint| {
-                    let point = waypoint.point();
-                    let position = walkers::lat_lon(point.y(), point.x());
-                    let screen_vec = projector.project(position);
-                    egui::Pos2::new(screen_vec.x, screen_vec.y)
-                })
-                .collect();
+            // Pre-allocate to avoid repeated allocations during mapping
+            let mut screen_points: Vec<egui::Pos2> = Vec::with_capacity(points.len());
+            for waypoint in points {
+                let point = waypoint.point();
+                let position = walkers::lat_lon(point.y(), point.x());
+                let screen_vec = projector.project(position);
+                screen_points.push(egui::Pos2::new(screen_vec.x, screen_vec.y));
+            }
 
             // Draw the polyline if we have at least 2 points
             if screen_points.len() >= 2 {
@@ -161,15 +151,14 @@ impl TrackPlugin {
                 continue;
             }
 
-            let screen_points: Vec<egui::Pos2> = points
-                .iter()
-                .map(|waypoint| {
-                    let point = waypoint.point();
-                    let position = walkers::lat_lon(point.y(), point.x());
-                    let screen_vec = projector.project(position);
-                    egui::Pos2::new(screen_vec.x, screen_vec.y)
-                })
-                .collect();
+            // Pre-allocate screen_points to avoid allocation churn during rendering
+            let mut screen_points: Vec<egui::Pos2> = Vec::with_capacity(points.len());
+            for waypoint in points {
+                let point = waypoint.point();
+                let position = walkers::lat_lon(point.y(), point.x());
+                let screen_vec = projector.project(position);
+                screen_points.push(egui::Pos2::new(screen_vec.x, screen_vec.y));
+            }
 
             if screen_points.len() >= 2 {
                 if self.show_outline {
