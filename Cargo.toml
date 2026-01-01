@@ -36,3 +36,14 @@ geo = "0.31"
 wasm-bindgen = "0.2"
 web-sys = "0.3"
 futures = "0.3"
+
+# === Release ===
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+
+[profile.dev]
+opt-level = 1

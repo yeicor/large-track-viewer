@@ -70,14 +70,3 @@ label = "Large Track Viewer"
 min_sdk_version = 23
 target_sdk_version = 35
 max_sdk_version = 35
-
-# === Release ===
-
-[profile.release]
-opt-level = 3
-lto = true
-codegen-units = 1
-strip = true
-
-[profile.dev]
-opt-level = 1

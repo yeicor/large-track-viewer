@@ -8,8 +8,6 @@ use egui::DroppedFile;
 use large_track_lib::{Config, RouteCollection};
 use std::path::PathBuf;
 use std::sync::Arc;
-#[cfg(not(target_arch = "wasm32"))]
-use tokio::io::AsyncReadExt;
 use tokio::sync::RwLock;
 
 /// Main application state
@@ -215,6 +213,7 @@ impl AppState {
         let buf = {
             #[cfg(not(target_arch = "wasm32"))]
             {
+                use tokio::io::AsyncReadExt;
                 let file = tokio::fs::File::open(file.path.as_ref().unwrap())
                     .await
                     .map_err(|e| format!("Error opening file: {:?}", e))?;
