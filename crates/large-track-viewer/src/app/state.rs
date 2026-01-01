@@ -9,7 +9,8 @@ use eframe_entrypoints::async_runtime::RwLock;
 use egui::DroppedFile;
 use large_track_lib::{Config, RouteCollection};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 /// Generate a stable synthetic path for a dropped file when a real path is unavailable.
 /// Web-dropped files often don't include a filesystem path. We use a "web://" prefix
@@ -139,10 +140,10 @@ pub struct FileLoader {
 
     /// Results from parallel loading (path, result) - accumulated incrementally
     #[allow(clippy::type_complexity)]
-    pub parallel_load_results: Arc<RwLock<Vec<(PathBuf, Result<gpx::Gpx, String>)>>>,
+    pub parallel_load_results: Arc<Mutex<Vec<(PathBuf, Result<gpx::Gpx, String>)>>>,
 
     /// Total number of files in current parallel load batch
-    pub parallel_total_files: Arc<RwLock<usize>>,
+    pub parallel_total_files: Arc<AtomicUsize>,
 }
 
 /// Statistics about loaded data
@@ -211,8 +212,8 @@ impl AppState {
             errors: Vec::new(),
             loaded_files: Vec::new(),
             show_picker: false,
-            parallel_load_results: Arc::new(RwLock::new(Vec::new())),
-            parallel_total_files: Arc::new(RwLock::new(0)),
+            parallel_load_results: Arc::new(Mutex::new(Vec::new())),
+            parallel_total_files: Arc::new(AtomicUsize::new(0)),
         };
 
         Self {
@@ -270,21 +271,9 @@ impl AppState {
         // Set the totals and reset counters
         let files_len = files_to_load.len();
 
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            // Ensure the total_files is updated; block until we can acquire the lock on native.
-            async_runtime::blocking_write(&total_files, |v| {
-                *v = files_len;
-            });
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            if let Ok(mut total_files_lock) = total_files.try_write() {
-                *total_files_lock = files_len;
-            } else {
-                // Could not acquire lock; skip updating this frame
-            }
-        }
+        // Store total files atomically (works on all platforms).
+        // `total_files` is an `Arc<AtomicUsize>`, so we can update it directly.
+        total_files.store(files_len, Ordering::SeqCst);
         // Limit concurrency to number of logical CPU cores (native only)
         // On web, we use a smaller number since web workers have more overhead
         #[cfg(not(target_arch = "wasm32"))]
@@ -307,7 +296,8 @@ impl AppState {
                     // Compute a stable identifier for this file (real path when available,
                     // synthetic web://<name> otherwise).
                     let path = synthetic_path_for(&dropped_file);
-                    results.write().await.push((path, result));
+                    let mut guard = results.lock().unwrap();
+                    guard.push((path, result));
                 }
                 drop(permit); // release semaphore
                 // Yield to allow other tasks to run (helps UI responsiveness)
@@ -321,19 +311,7 @@ impl AppState {
     /// Returns true if there are more results to process.
     pub fn process_parallel_results(&mut self) -> bool {
         // Check if we're done (all added)
-        #[cfg(not(target_arch = "wasm32"))]
-        let total = {
-            let mut tmp = 0usize;
-            async_runtime::blocking_read(&self.file_loader.parallel_total_files, |v| {
-                tmp = *v;
-            });
-            tmp
-        };
-        #[cfg(target_arch = "wasm32")]
-        let total = match self.file_loader.parallel_total_files.try_read() {
-            Ok(guard) => *guard,
-            Err(_) => 0,
-        };
+        let total = self.file_loader.parallel_total_files.load(Ordering::SeqCst);
 
         let added = self.file_loader.loaded_files.len() + self.file_loader.errors.len();
         if total > 0 && added >= total {
@@ -343,31 +321,12 @@ impl AppState {
 
         // Process exactly one result per frame to keep UI fluid during indexing
         // Take one result (non-blocking)
-        #[cfg(not(target_arch = "wasm32"))]
         let result: Option<(PathBuf, Result<gpx::Gpx, String>)> = {
-            let mut out: Option<(PathBuf, Result<gpx::Gpx, String>)> = None;
-            async_runtime::blocking_write(
-                &self.file_loader.parallel_load_results,
-                |results_lock| {
-                    if results_lock.is_empty() {
-                        // leave None
-                    } else {
-                        out = Some(results_lock.remove(0));
-                    }
-                },
-            );
-            out
-        };
-        #[cfg(target_arch = "wasm32")]
-        let result: Option<(PathBuf, Result<gpx::Gpx, String>)> = {
-            if let Ok(mut results_lock) = self.file_loader.parallel_load_results.try_write() {
-                if results_lock.is_empty() {
-                    None
-                } else {
-                    Some(results_lock.remove(0))
-                }
-            } else {
+            let mut guard = self.file_loader.parallel_load_results.lock().unwrap();
+            if guard.is_empty() {
                 None
+            } else {
+                Some(guard.remove(0))
             }
         };
 
@@ -437,97 +396,41 @@ impl AppState {
             Err(e) => {
                 // Preserve the error String for both storage and transient UI feedback.
                 self.file_loader.errors.push((path, e));
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    async_runtime::blocking_write(&self.file_loader.parallel_total_files, |v| {
-                        *v -= 1;
-                    });
-                }
-                #[cfg(target_arch = "wasm32")]
-                {
-                    if let Ok(mut total_lock) = self.file_loader.parallel_total_files.try_write() {
-                        *total_lock -= 1;
-                    }
-                }
+                self.file_loader
+                    .parallel_total_files
+                    .fetch_sub(1, Ordering::SeqCst);
                 // No need to increment a processed counter; progress is now based on loaded_files + errors.
             }
         }
 
         // Return true if there are more results to process or still loading
-        #[cfg(not(target_arch = "wasm32"))]
-        let more_results = {
-            let mut empty = false;
-            async_runtime::blocking_read(&self.file_loader.parallel_load_results, |results_lock| {
-                empty = results_lock.is_empty();
-            });
-            !empty
-        };
-        #[cfg(target_arch = "wasm32")]
-        let more_results = match self.file_loader.parallel_load_results.try_read() {
-            Ok(results_lock) => !results_lock.is_empty(),
-            Err(_) => false,
-        };
+        let more_results = !self
+            .file_loader
+            .parallel_load_results
+            .lock()
+            .unwrap()
+            .is_empty();
         more_results || self.is_parallel_loading()
     }
 
     /// Check if parallel loading is in progress
     pub fn is_parallel_loading(&self) -> bool {
-        #[cfg(not(target_arch = "wasm32"))]
-        let total = {
-            let mut tmp = 0usize;
-            async_runtime::blocking_read(&self.file_loader.parallel_total_files, |v| {
-                tmp = *v;
-            });
-            tmp
-        };
-        #[cfg(target_arch = "wasm32")]
-        #[cfg(not(target_arch = "wasm32"))]
-        let total = {
-            let mut tmp = 0usize;
-            async_runtime::blocking_read(&self.file_loader.parallel_total_files, |v| {
-                tmp = *v;
-            });
-            tmp
-        };
-        #[cfg(target_arch = "wasm32")]
-        #[cfg(not(target_arch = "wasm32"))]
-        let total = {
-            let mut tmp = 0usize;
-            async_runtime::blocking_read(&self.file_loader.parallel_total_files, |v| {
-                tmp = *v;
-            });
-            tmp
-        };
-        #[cfg(target_arch = "wasm32")]
-        let total = match self.file_loader.parallel_total_files.try_read() {
-            Ok(guard) => *guard,
-            Err(_) => 0,
-        };
+        // Use atomic load for the total file count. This is simple, correct,
+        // and works uniformly across native and wasm targets.
+        let total = self.file_loader.parallel_total_files.load(Ordering::SeqCst);
         total > 0 && self.file_loader.loaded_files.len() < total
     }
 
     /// Reset parallel loading state (called when all routes are added)
     fn reset_parallel_loading(&mut self) {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            async_runtime::blocking_write(&self.file_loader.parallel_total_files, |v| {
-                *v = 0;
-            });
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            if let Ok(mut total_files_lock) = self.file_loader.parallel_total_files.try_write() {
-                *total_files_lock = 0;
-            }
-        }
+        self.file_loader
+            .parallel_total_files
+            .store(0, Ordering::SeqCst);
     }
 
     /// Get loading progress (0.0 to 1.0)
     pub fn loading_progress(&self) -> f32 {
-        let total = match self.file_loader.parallel_total_files.try_read() {
-            Ok(guard) => *guard,
-            Err(_) => 0,
-        };
+        let total = self.file_loader.parallel_total_files.load(Ordering::SeqCst);
         if total == 0 {
             0.0
         } else {
@@ -537,10 +440,7 @@ impl AppState {
 
     /// Get loading status text
     pub fn loading_status(&self) -> String {
-        let total = match self.file_loader.parallel_total_files.try_read() {
-            Ok(guard) => *guard,
-            Err(_) => 0,
-        };
+        let total = self.file_loader.parallel_total_files.load(Ordering::SeqCst);
         let processed = self.file_loader.loaded_files.len() + self.file_loader.errors.len();
         if processed < total {
             format!("{}/{}", processed, total)
@@ -718,10 +618,7 @@ impl Default for UiSettings {
 impl FileLoader {
     /// Check if any files are being processed
     pub fn is_busy(&self) -> bool {
-        let total = match self.parallel_total_files.try_read() {
-            Ok(guard) => *guard,
-            Err(_) => 0,
-        };
+        let total = self.parallel_total_files.load(Ordering::SeqCst);
         let processed = self.loaded_files.len() + self.errors.len();
         !self.pending_files.is_empty() || (total > 0 && processed < total)
     }

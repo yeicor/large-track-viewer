@@ -288,8 +288,11 @@ impl LargeTrackViewerApp {
             errors: Vec::new(),
             loaded_files: Vec::new(),
             show_picker: false,
-            parallel_load_results: Arc::new(RwLock::new(Vec::new())),
-            parallel_total_files: Arc::new(RwLock::new(0)),
+            // Use a standard mutex for the results queue and an atomic counter for totals.
+            // This simplifies concurrency: workers push into the mutex-protected Vec and
+            // update the atomic counter; the UI thread can lock briefly to pop results.
+            parallel_load_results: Arc::new(std::sync::Mutex::new(Vec::new())),
+            parallel_total_files: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         };
 
         AppState {
@@ -529,16 +532,18 @@ impl eframe::App for LargeTrackViewerApp {
 
         // Add files being processed in parallel (from results queue)
         {
-            if let Ok(results) = self.state.file_loader.parallel_load_results.try_read() {
-                for (path, _) in results.iter() {
-                    let path_str: String = path.to_string_lossy().to_string();
-                    // Skip synthetic web-only identifiers
-                    if path_str.starts_with("web://") {
-                        continue;
-                    }
-                    if !all_file_paths.contains(&path_str) {
-                        all_file_paths.push(path_str);
-                    }
+            // Use the mutex-based results container to read any in-progress results.
+            // Locking here is brief and deterministic; on native this is a std::sync::Mutex
+            // and on wasm it is likewise safe because we only hold the lock very briefly.
+            let guard = self.state.file_loader.parallel_load_results.lock().unwrap();
+            for (path, _) in guard.iter() {
+                let path_str: String = path.to_string_lossy().to_string();
+                // Skip synthetic web-only identifiers
+                if path_str.starts_with("web://") {
+                    continue;
+                }
+                if !all_file_paths.contains(&path_str) {
+                    all_file_paths.push(path_str);
                 }
             }
         }

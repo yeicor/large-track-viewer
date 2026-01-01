@@ -123,10 +123,14 @@ fn render_tracks_tab(ui: &mut Ui, state: &mut AppState, is_portrait: bool) {
     // Action buttons at top
     if is_portrait {
         ui.vertical(|ui| {
-            if ui.button("📂 Load GPX Files...").clicked() {
-                state.file_loader.show_picker = true;
-            }
             ui.horizontal(|ui| {
+                ui.group(|ui| {
+                    #[cfg(target_arch = "wasm32")]
+                    ui.disable();
+                    if ui.button("📂 Load GPX Files...").clicked() {
+                        state.file_loader.show_picker = true;
+                    }
+                });
                 if ui.button("🎯 Fit to Bounds").clicked() {
                     state.pending_fit_bounds = true;
                 }
