@@ -15,16 +15,32 @@ static APP_CREATOR_PTR: AtomicUsize = AtomicUsize::new(0);
 
 pub fn set_app_creator(creator: fn(&eframe::CreationContext) -> Box<dyn eframe::App>) {
     let ptr = creator as usize;
-    APP_CREATOR_PTR
-        .compare_exchange(0, ptr, Ordering::SeqCst, Ordering::SeqCst)
-        .expect("app_creator already set");
+    match APP_CREATOR_PTR.compare_exchange(0, ptr, Ordering::SeqCst, Ordering::SeqCst) {
+        Ok(_) => {
+            // Successfully set for the first time.
+        }
+        Err(existing) => {
+            // If it's the same pointer, consider this idempotent and do nothing.
+            // If it's different, log a warning and keep the original.
+            if existing != ptr {
+                tracing::warn!(
+                    "app_creator already set to a different function; ignoring subsequent set"
+                );
+            }
+        }
+    }
 }
 
-fn get_app_creator() -> fn(&eframe::CreationContext) -> Box<dyn eframe::App> {
+fn get_app_creator() -> Option<fn(&eframe::CreationContext) -> Box<dyn eframe::App>> {
     let ptr = APP_CREATOR_PTR.load(Ordering::SeqCst);
-    assert!(ptr != 0, "app_creator not set");
-    unsafe {
-        std::mem::transmute::<usize, fn(&eframe::CreationContext) -> Box<dyn eframe::App>>(ptr)
+    if ptr == 0 {
+        None
+    } else {
+        // SAFETY: we only store function pointers (usize) via set_app_creator,
+        // so transmuting back is safe as long as ptr != 0.
+        Some(unsafe {
+            std::mem::transmute::<usize, fn(&eframe::CreationContext) -> Box<dyn eframe::App>>(ptr)
+        })
     }
 }
 
@@ -65,7 +81,14 @@ impl WebHandle {
     ) -> Result<(), wasm_bindgen::JsValue> {
         // Copy the function pointer out so the closure does not capture `&self`,
         // allowing the closure to be 'static as required by WebRunner.
-        let creator: fn(&eframe::CreationContext) -> Box<dyn eframe::App> = get_app_creator();
+        // get_app_creator now returns an Option to avoid panics if it wasn't set.
+        let creator = match get_app_creator() {
+            Some(c) => c,
+            None => {
+                // Return a JS error so the caller can see what went wrong instead of panicking.
+                return Err(wasm_bindgen::JsValue::from_str("app_creator not set"));
+            }
+        };
 
         self.runner
             .start(

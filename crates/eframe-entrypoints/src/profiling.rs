@@ -69,15 +69,32 @@ pub fn setup_logging_and_profiling() {
             .with(reload_layer)
             .with(fmt_layer);
 
-        // Initialize state with reload handle
-        *get_profiling_state().lock().unwrap() = Some(ProfilingState {
-            reload_handle,
-            guard: None,
-            trace_file: None,
-            served_trace_file: None,
-            http_server: None,
-            shutdown_tx: None,
-        });
+        // Initialize state with reload handle. Handle poisoned mutex gracefully.
+        match get_profiling_state().lock() {
+            Ok(mut guard) => {
+                *guard = Some(ProfilingState {
+                    reload_handle,
+                    guard: None,
+                    trace_file: None,
+                    served_trace_file: None,
+                    http_server: None,
+                    shutdown_tx: None,
+                });
+            }
+            Err(poisoned) => {
+                // Recover from a poisoned mutex to avoid panics while still logging the issue.
+                tracing::warn!("Profiling state mutex was poisoned during init; recovering");
+                let mut guard = poisoned.into_inner();
+                *guard = Some(ProfilingState {
+                    reload_handle,
+                    guard: None,
+                    trace_file: None,
+                    served_trace_file: None,
+                    http_server: None,
+                    shutdown_tx: None,
+                });
+            }
+        }
 
         // An env var can automatically enable profiling at startup if desired
         if std::env::var("ENABLE_PROFILING").is_ok() {
@@ -100,8 +117,21 @@ pub fn setup_logging_and_profiling() {
 #[cfg(feature = "profiling")]
 pub fn start_profiling() {
     let state_lock = get_profiling_state();
-    let mut state_opt = state_lock.lock().unwrap();
-    let state = state_opt.as_mut().expect("Profiling state not initialized");
+    // Handle poisoned mutex gracefully.
+    let mut state_opt = match state_lock.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            tracing::warn!("Profiling state mutex poisoned; recovering");
+            poisoned.into_inner()
+        }
+    };
+    let state = match state_opt.as_mut() {
+        Some(s) => s,
+        None => {
+            tracing::error!("Profiling state not initialized");
+            return;
+        }
+    };
 
     if state.trace_file.is_some() {
         tracing::warn!("Profiling already enabled");
@@ -130,10 +160,9 @@ pub fn start_profiling() {
     let (chrome_layer, guard) = tracing_chrome::ChromeLayerBuilder::new().build();
 
     // Enable the chrome layer via reload
-    state
-        .reload_handle
-        .reload(Some(chrome_layer))
-        .expect("Failed to enable chrome layer");
+    if let Err(e) = state.reload_handle.reload(Some(chrome_layer)) {
+        tracing::error!("Failed to enable chrome layer: {:?}", e);
+    }
 
     state.guard = Some(guard);
 
@@ -149,8 +178,21 @@ pub fn start_profiling() {
 #[cfg(feature = "profiling")]
 pub fn stop_profiling() {
     let state_lock = get_profiling_state();
-    let mut state_opt = state_lock.lock().unwrap();
-    let state = state_opt.as_mut().expect("Profiling state not initialized");
+    // Handle poisoned mutex gracefully.
+    let mut state_opt = match state_lock.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            tracing::warn!("Profiling state mutex poisoned; recovering");
+            poisoned.into_inner()
+        }
+    };
+    let state = match state_opt.as_mut() {
+        Some(s) => s,
+        None => {
+            tracing::error!("Profiling state not initialized");
+            return;
+        }
+    };
 
     if state.trace_file.is_none() {
         tracing::warn!("Profiling not enabled");
@@ -160,10 +202,9 @@ pub fn stop_profiling() {
     tracing::info!("Stopping profiling session...");
 
     // Disable the chrome layer via reload
-    state
-        .reload_handle
-        .reload(None::<ChromeLayer<Registry>>)
-        .expect("Failed to disable chrome layer");
+    if let Err(e) = state.reload_handle.reload(None::<ChromeLayer<Registry>>) {
+        tracing::error!("Failed to disable chrome layer: {:?}", e);
+    }
 
     // Drop the guard to flush the trace file
     state.guard = None;
@@ -389,7 +430,15 @@ fn serve_and_open_trace(trace_path: PathBuf, state: &mut ProfilingState) {
 #[cfg(feature = "profiling")]
 pub fn is_profiling_enabled() -> bool {
     let state_lock = get_profiling_state();
-    let state_opt = state_lock.lock().unwrap();
+    let state_opt = match state_lock.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            tracing::warn!(
+                "Profiling state mutex poisoned when checking enabled; treating as disabled"
+            );
+            poisoned.into_inner()
+        }
+    };
     state_opt
         .as_ref()
         .map(|s| s.trace_file.is_some())

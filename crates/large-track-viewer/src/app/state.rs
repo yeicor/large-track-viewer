@@ -228,7 +228,10 @@ impl AppState {
             }
             #[cfg(target_arch = "wasm32")]
             {
-                file.bytes.clone().unwrap()
+                // On wasm, ensure bytes are present; if not, return an error instead of panicking.
+                file.bytes
+                    .clone()
+                    .ok_or_else(|| "No file bytes available for dropped file".to_string())?
             }
         };
         let cursor = std::io::Cursor::new(buf);
@@ -273,10 +276,17 @@ impl AppState {
             async_runtime::spawn(async move {
                 let permit = semaphore.acquire_owned().await.unwrap();
                 let result = Self::load_file_to_gpx(&dropped_file).await;
-                results
-                    .write()
-                    .await
-                    .push((dropped_file.path.unwrap(), result));
+                {
+                    // Use a safe path for results: prefer the actual filesystem path when available,
+                    // otherwise fall back to a name-based synthetic path (useful for web where
+                    // dropped files may not have a real filesystem path).
+                    let path = if let Some(p) = dropped_file.path.clone() {
+                        p
+                    } else {
+                        PathBuf::from(dropped_file.name.clone())
+                    };
+                    results.write().await.push((path, result));
+                }
                 drop(permit); // release semaphore
                 // Yield to allow other tasks to run (helps UI responsiveness)
                 async_runtime::yield_now().await;
@@ -423,11 +433,18 @@ impl AppState {
 
     /// Add a file to the pending load queue
     pub fn queue_file(&mut self, dropped_file: DroppedFile) {
-        let already_loaded = self
-            .file_loader
-            .loaded_files
-            .iter()
-            .any(|(p, _, _)| p == dropped_file.path.as_ref().unwrap());
+        let already_loaded = self.file_loader.loaded_files.iter().any(|(p, _, _)| {
+            // If the dropped file has a real filesystem path, compare against it.
+            // Otherwise (e.g. browser-dropped files), fall back to comparing by filename.
+            if let Some(dp) = dropped_file.path.as_ref() {
+                p.as_path() == dp
+            } else {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|s| s == dropped_file.name)
+                    .unwrap_or(false)
+            }
+        });
         if !self.file_loader.pending_files.contains(&dropped_file) && !already_loaded {
             self.file_loader.pending_files.push(dropped_file);
         }
