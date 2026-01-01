@@ -149,7 +149,7 @@ macro_rules! eframe_app_main {
     () => {
         fn main() {
             #[cfg(not(target_arch = "wasm32"))]
-            $crate::run_native();
+            large_track_viewer::run_native();
         }
 
         #[cfg(target_arch = "wasm32")]

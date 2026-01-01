@@ -283,7 +283,7 @@ fn render_stats_section(ui: &mut Ui, state: &AppState) {
             ui.end_row();
 
             // Performance stats (if we have query data)
-            if state.stats.last_query_time_ms > 0.0 {
+            if state.stats.last_query_time_ms >= 0.0 {
                 ui.separator();
                 ui.separator();
                 ui.end_row();
