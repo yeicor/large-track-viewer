@@ -4,11 +4,12 @@
 //! UI settings, and file loading operations.
 
 use crate::app::settings::Settings;
+use eframe_entrypoints::async_runtime;
+use eframe_entrypoints::async_runtime::RwLock;
 use egui::DroppedFile;
 use large_track_lib::{Config, RouteCollection};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 
 /// Main application state
 pub struct AppState {
@@ -27,7 +28,7 @@ pub struct AppState {
     /// Currently selected route (index into the collection) for highlighting/overlay.
     /// Shared across UI and plugin so both can read/write selection using an async RwLock.
     /// `None` means no route is selected.
-    pub selected_route: Arc<tokio::sync::RwLock<Option<usize>>>,
+    pub selected_route: Arc<RwLock<Option<usize>>>,
 
     /// Whether to show the mouse wheel zoom warning
     pub show_wheel_warning: bool,
@@ -119,10 +120,10 @@ pub struct FileLoader {
 
     /// Results from parallel loading (path, result) - accumulated incrementally
     #[allow(clippy::type_complexity)]
-    pub parallel_load_results: Arc<tokio::sync::RwLock<Vec<(PathBuf, Result<gpx::Gpx, String>)>>>,
+    pub parallel_load_results: Arc<RwLock<Vec<(PathBuf, Result<gpx::Gpx, String>)>>>,
 
     /// Total number of files in current parallel load batch
-    pub parallel_total_files: Arc<tokio::sync::RwLock<usize>>,
+    pub parallel_total_files: Arc<RwLock<usize>>,
 }
 
 /// Statistics about loaded data
@@ -200,7 +201,7 @@ impl AppState {
             ui_settings,
             file_loader,
             stats: Stats::default(),
-            selected_route: Arc::new(tokio::sync::RwLock::new(None)),
+            selected_route: Arc::new(RwLock::new(None)),
             show_wheel_warning: false,
             wheel_warning_shown_at: None,
             pending_fit_bounds: false,
@@ -246,8 +247,6 @@ impl AppState {
 
         // Set the totals and reset counters
         let files_len = files_to_load.len();
-        let rt = tokio::runtime::Handle::try_current()
-            .expect("Must be called from within a tokio runtime");
 
         {
             if let Ok(mut total_files_lock) = total_files.try_write() {
@@ -257,15 +256,21 @@ impl AppState {
             }
         }
         // Limit concurrency to number of logical CPU cores (native only)
+        // On web, we use a smaller number since web workers have more overhead
+        #[cfg(not(target_arch = "wasm32"))]
         let max_concurrent = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(4); // fallback to 4 if detection fails
-        let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(max_concurrent));
+        #[cfg(target_arch = "wasm32")]
+        let max_concurrent = 4; // Use a reasonable default for web workers
+
+        let semaphore = std::sync::Arc::new(async_runtime::Semaphore::new(max_concurrent));
 
         for dropped_file in files_to_load {
             let results = results.clone();
             let semaphore = semaphore.clone();
-            rt.spawn(async move {
+            // Use async_runtime::spawn which works on both native (tokio) and web (tokio-with-wasm)
+            async_runtime::spawn(async move {
                 let permit = semaphore.acquire_owned().await.unwrap();
                 let result = Self::load_file_to_gpx(&dropped_file).await;
                 results
@@ -274,7 +279,7 @@ impl AppState {
                     .push((dropped_file.path.unwrap(), result));
                 drop(permit); // release semaphore
                 // Yield to allow other tasks to run (helps UI responsiveness)
-                tokio::task::yield_now().await;
+                async_runtime::yield_now().await;
             });
         }
     }

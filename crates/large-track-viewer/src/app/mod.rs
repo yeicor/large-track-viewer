@@ -16,9 +16,9 @@ use crate::app::plugin::{RenderStats, TrackPlugin};
 use crate::app::settings::Settings;
 use crate::app::state::{AppState, SidebarTab, TilesProvider};
 use eframe::egui;
+use eframe_entrypoints::async_runtime::RwLock;
 use egui::DroppedFile;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use walkers::{
     HttpTiles, Map, MapMemory, TileId,
     sources::{Attribution, OpenStreetMap, TileSource},
@@ -241,7 +241,7 @@ impl LargeTrackViewerApp {
             file_loader,
             stats: Default::default(),
             // Initialize the shared async RwLock used for selection throughout the app.
-            selected_route: Arc::new(tokio::sync::RwLock::new(None)),
+            selected_route: Arc::new(RwLock::new(None)),
             show_wheel_warning: false,
             wheel_warning_shown_at: None,
             pending_fit_bounds: false,

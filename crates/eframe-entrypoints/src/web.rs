@@ -1,6 +1,10 @@
 //! Web entry point for egui/eframe applications
 //!
 //! This module provides a reusable WebHandle for WASM builds.
+//!
+//! On web, async tasks are executed using tokio-with-wasm which runs
+//! them on the JavaScript event loop. This means no manual runtime
+//! management is needed - async tasks "just work" when spawned.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use wasm_bindgen::prelude::*;
@@ -21,98 +25,6 @@ fn get_app_creator() -> fn(&eframe::CreationContext) -> Box<dyn eframe::App> {
     assert!(ptr != 0, "app_creator not set");
     unsafe {
         std::mem::transmute::<usize, fn(&eframe::CreationContext) -> Box<dyn eframe::App>>(ptr)
-    }
-}
-/// Storage for the tokio runtime handle.
-/// Set once at runtime.
-static RUNTIME: std::sync::OnceLock<tokio::runtime::Handle> = std::sync::OnceLock::new();
-
-pub fn set_runtime(handle: tokio::runtime::Handle) {
-    RUNTIME.set(handle).expect("runtime already set");
-}
-
-fn get_runtime() -> &'static tokio::runtime::Handle {
-    RUNTIME.get().expect("runtime not set")
-}
-
-use std::time::Duration;
-
-use eframe::{App, Frame, Storage};
-use egui::Context;
-use egui::RawInput;
-use egui::Visuals;
-
-/// A wrapper for eframe::App that ensures all method calls are made within a tokio runtime context.
-pub struct RuntimeAppWrapper {
-    inner: Box<dyn App>,
-}
-
-impl RuntimeAppWrapper {
-    /// Creates a new RuntimeAppWrapper wrapping the given app.
-    pub fn new(app: Box<dyn App>) -> Self {
-        Self { inner: app }
-    }
-}
-
-fn make_progress(rt: &tokio::runtime::Handle) {
-    rt.block_on(async {
-        for _i in 0..100000 {
-            tokio::task::yield_now().await;
-        }
-    });
-}
-
-impl App for RuntimeAppWrapper {
-    fn update(&mut self, ctx: &Context, frame: &mut Frame) {
-        let rt = get_runtime();
-        let _guard = rt.enter();
-        self.inner.update(ctx, frame);
-        make_progress(rt);
-    }
-
-    fn save(&mut self, storage: &mut dyn Storage) {
-        let rt = get_runtime();
-        let _guard = rt.enter();
-        self.inner.save(storage);
-        make_progress(rt);
-    }
-
-    fn on_exit(&mut self, gl: Option<&eframe::glow::Context>) {
-        let rt = get_runtime();
-        let _guard = rt.enter();
-        self.inner.on_exit(gl);
-        make_progress(rt);
-    }
-
-    fn auto_save_interval(&self) -> Duration {
-        let rt = get_runtime();
-        let _guard = rt.enter();
-        let result = self.inner.auto_save_interval();
-        make_progress(rt);
-        result
-    }
-
-    fn clear_color(&self, visuals: &Visuals) -> [f32; 4] {
-        let rt = get_runtime();
-        let _guard = rt.enter();
-        let result = self.inner.clear_color(visuals);
-        make_progress(rt);
-        result
-    }
-
-    fn persist_egui_memory(&self) -> bool {
-        let rt = get_runtime();
-        let _guard = rt.enter();
-        let result = self.inner.persist_egui_memory();
-        make_progress(rt);
-        result
-    }
-
-    fn raw_input_hook(&mut self, ctx: &Context, raw_input: &mut RawInput) {
-        let rt = get_runtime();
-        let _guard = rt.enter();
-        self.inner.raw_input_hook(ctx, raw_input);
-        make_progress(rt);
     }
 }
 
@@ -160,8 +72,10 @@ impl WebHandle {
                 canvas,
                 eframe::WebOptions::default(),
                 Box::new(move |cc| {
-                    let base_app = creator(cc);
-                    Ok(Box::new(RuntimeAppWrapper::new(base_app)))
+                    // On web, tokio-with-wasm handles async tasks on the JS event loop.
+                    // No RuntimeAppWrapper needed - async tasks spawned with
+                    // tokio_with_wasm::spawn() will be driven by the JS event loop naturally.
+                    Ok(creator(cc))
                 }),
             )
             .await

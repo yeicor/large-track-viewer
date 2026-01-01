@@ -50,6 +50,7 @@ web-sys.workspace = true
 tracing-wasm = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 console_error_panic_hook = "0.1"
+tokio_with_wasm = { version = "0.8", features = ["rt", "sync", "time"] }
 
 # === Android ===
 [target.'cfg(target_os = "android")'.dependencies]

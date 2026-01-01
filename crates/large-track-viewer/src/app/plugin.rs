@@ -3,10 +3,10 @@
 //! This module provides a custom walkers plugin that queries visible route segments
 //! from the data module and renders them on the map with proper LOD handling.
 
+use eframe_entrypoints::async_runtime::RwLock;
 use egui::{Color32, Stroke};
 use large_track_lib::{RouteCollection, SimplifiedSegment};
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use walkers::{Plugin, Projector};
 
 /// Statistics from the last render pass
@@ -28,8 +28,8 @@ pub struct TrackPlugin {
     show_outline: bool,
     /// Shared statistics output (updated after each render)
     stats: Arc<RwLock<RenderStats>>,
-    /// Shared selected route handle (owned by AppState). Use tokio RwLock for cross-platform compatibility.
-    selected: Arc<tokio::sync::RwLock<Option<usize>>>,
+    /// Shared selected route handle (owned by AppState). Use async RwLock for cross-platform compatibility.
+    selected: Arc<RwLock<Option<usize>>>,
 }
 
 impl TrackPlugin {
@@ -39,7 +39,7 @@ impl TrackPlugin {
         width: f32,
         show_outline: bool,
         stats: Arc<RwLock<RenderStats>>,
-        selected: Arc<tokio::sync::RwLock<Option<usize>>>,
+        selected: Arc<RwLock<Option<usize>>>,
     ) -> Self {
         Self {
             collection,

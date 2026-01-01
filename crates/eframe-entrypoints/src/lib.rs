@@ -27,6 +27,7 @@
 //! }
 //! ```
 
+pub mod async_runtime;
 pub mod cli;
 pub mod profiling;
 pub mod run;
@@ -99,14 +100,12 @@ macro_rules! eframe_app_lib {
         // ==========================================
         // Web (WASM) entry point
         // ==========================================
+        /// Sets up the app creator for web builds.
+        /// On web, we use tokio-with-wasm which runs async tasks on the JS event loop,
+        /// so no tokio runtime is needed.
         #[cfg(target_arch = "wasm32")]
         #[wasm_bindgen::prelude::wasm_bindgen]
         pub fn do_set_app_creator() {
-            let rt = ::tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("Failed to create Tokio runtime");
-            $crate::web::set_runtime(rt.handle().clone());
             $crate::web::set_app_creator($app_creator);
         }
 

@@ -58,6 +58,7 @@ wasm-bindgen.workspace = true
 web-sys.workspace = true
 tracing-wasm = "0.2"
 console_error_panic_hook = "0.1"
+tokio_with_wasm = { version = "0.8", features = ["rt", "sync", "time"] }
 
 # === Android ===
 [package.metadata.android]
