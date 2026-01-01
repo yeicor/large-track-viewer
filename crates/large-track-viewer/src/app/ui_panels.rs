@@ -259,10 +259,9 @@ fn render_tracks_tab(ui: &mut Ui, state: &mut AppState, is_portrait: bool) {
                         if ui
                             .selectable_label(is_selected, format!("📄 {}", file_name))
                             .clicked()
+                            && let Ok(mut guard) = state.selected_route.try_write()
                         {
-                            if let Ok(mut guard) = state.selected_route.try_write() {
-                                *guard = Some(*start_idx);
-                            }
+                            *guard = Some(*start_idx);
                         }
 
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

@@ -201,12 +201,12 @@ mod file_storage {
         /// - Else: $HOME/.config/large-track-viewer/storage.json
         fn default_storage_path() -> PathBuf {
             // Prefer APPDATA on Windows
-            if cfg!(windows) {
-                if let Ok(appdata) = std::env::var("APPDATA") {
-                    return Path::new(&appdata)
-                        .join("LargeTrackViewer")
-                        .join("storage.json");
-                }
+            if cfg!(windows)
+                && let Ok(appdata) = std::env::var("APPDATA")
+            {
+                return Path::new(&appdata)
+                    .join("LargeTrackViewer")
+                    .join("storage.json");
             }
 
             if let Ok(home) = std::env::var("HOME") {
@@ -224,13 +224,13 @@ mod file_storage {
             let path = path.unwrap_or_else(Self::default_storage_path);
 
             // Ensure parent directory exists
-            if let Some(parent) = path.parent() {
-                if let Err(e) = fs::create_dir_all(parent) {
-                    return Err(StorageError::Io(format!(
-                        "Failed to create storage parent directory: {}",
-                        e
-                    )));
-                }
+            if let Some(parent) = path.parent()
+                && let Err(e) = fs::create_dir_all(parent)
+            {
+                return Err(StorageError::Io(format!(
+                    "Failed to create storage parent directory: {}",
+                    e
+                )));
             }
 
             // Read file if present
