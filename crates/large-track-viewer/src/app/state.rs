@@ -296,7 +296,9 @@ impl AppState {
                     // Compute a stable identifier for this file (real path when available,
                     // synthetic web://<name> otherwise).
                     let path = synthetic_path_for(&dropped_file);
-                    let mut guard = results.lock().unwrap();
+                    let mut guard = results
+                        .lock()
+                        .expect("failed to acquire lock on parallel_load_results mutex to push worker result");
                     guard.push((path, result));
                 }
                 drop(permit); // release semaphore
@@ -322,7 +324,10 @@ impl AppState {
         // Process exactly one result per frame to keep UI fluid during indexing
         // Take one result (non-blocking)
         let result: Option<(PathBuf, Result<gpx::Gpx, String>)> = {
-            let mut guard = self.file_loader.parallel_load_results.lock().unwrap();
+            let mut guard =
+                self.file_loader.parallel_load_results.lock().expect(
+                    "failed to acquire lock on parallel_load_results mutex to pop UI result",
+                );
             if guard.is_empty() {
                 None
             } else {

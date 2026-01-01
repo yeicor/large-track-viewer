@@ -535,7 +535,12 @@ impl eframe::App for LargeTrackViewerApp {
             // Use the mutex-based results container to read any in-progress results.
             // Locking here is brief and deterministic; on native this is a std::sync::Mutex
             // and on wasm it is likewise safe because we only hold the lock very briefly.
-            let guard = self.state.file_loader.parallel_load_results.lock().unwrap();
+            let guard = self
+                .state
+                .file_loader
+                .parallel_load_results
+                .lock()
+                .expect("failed to acquire lock on parallel_load_results mutex in save()");
             for (path, _) in guard.iter() {
                 let path_str: String = path.to_string_lossy().to_string();
                 // Skip synthetic web-only identifiers
