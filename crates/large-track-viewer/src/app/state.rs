@@ -26,6 +26,11 @@ pub struct AppState {
     /// Statistics about loaded data
     pub stats: Stats,
 
+    /// Currently selected route (index into the collection) for highlighting/overlay.
+    /// Shared across UI and plugin so both can read/write selection using an async RwLock.
+    /// `None` means no route is selected.
+    pub selected_route: Arc<tokio::sync::RwLock<Option<usize>>>,
+
     /// Whether to show the mouse wheel zoom warning
     pub show_wheel_warning: bool,
 
@@ -106,8 +111,10 @@ pub struct FileLoader {
     /// Load errors
     pub errors: Vec<(PathBuf, String)>,
 
-    /// Successfully loaded files with their GPX data for potential removal
-    pub loaded_files: Vec<(PathBuf, gpx::Gpx)>,
+    /// Successfully loaded files with their GPX data and the starting route index
+    /// within the collection where routes from this file begin. This allows mapping
+    /// loaded files to route indices later (for selection & highlighting).
+    pub loaded_files: Vec<(PathBuf, gpx::Gpx, usize)>,
 
     /// Show file picker dialog
     pub show_picker: bool,
@@ -195,6 +202,7 @@ impl AppState {
             ui_settings,
             file_loader,
             stats: Stats::default(),
+            selected_route: Arc::new(tokio::sync::RwLock::new(None)),
             show_wheel_warning: false,
             wheel_warning_shown_at: None,
             pending_fit_bounds: false,
@@ -309,10 +317,17 @@ impl AppState {
 
         match parse_result {
             Ok(gpx) => {
-                // Add this single route to the collection
+                // Add this single route to the collection and record the starting index
+                let mut start_idx_opt: Option<usize> = None;
                 let add_result = {
                     if let Ok(mut collection) = self.route_collection.try_write() {
-                        collection.add_route(gpx.clone())
+                        // The route will be appended; record the index where it will be inserted.
+                        let start_idx = collection.route_count();
+                        let res = collection.add_route(gpx.clone());
+                        if res.is_ok() {
+                            start_idx_opt = Some(start_idx);
+                        }
+                        res
                     } else {
                         Err(large_track_lib::DataError::InvalidGeometry(
                             "Could not acquire write lock on route_collection".to_string(),
@@ -322,7 +337,9 @@ impl AppState {
 
                 match add_result {
                     Ok(_) => {
-                        self.file_loader.loaded_files.push((path, gpx));
+                        // Record the starting route index for this file so the UI can map files -> routes.
+                        let start_idx = start_idx_opt.unwrap_or(0);
+                        self.file_loader.loaded_files.push((path, gpx, start_idx));
                         self.update_stats();
                         self.pending_fit_bounds = true;
                     }
@@ -336,6 +353,9 @@ impl AppState {
             }
             Err(e) => {
                 self.file_loader.errors.push((path, e));
+                if let Ok(mut total_lock) = self.file_loader.parallel_total_files.try_write() {
+                    *total_lock -= 1;
+                }
                 // No need to increment a processed counter; progress is now based on loaded_files + errors.
             }
         }
@@ -354,8 +374,7 @@ impl AppState {
             Ok(guard) => *guard,
             Err(_) => 0,
         };
-        let processed = self.file_loader.loaded_files.len() + self.file_loader.errors.len();
-        total > 0 && processed < total
+        total > 0 && self.file_loader.loaded_files.len() < total
     }
 
     /// Reset parallel loading state (called when all routes are added)
@@ -363,7 +382,6 @@ impl AppState {
         if let Ok(mut total_files_lock) = self.file_loader.parallel_total_files.try_write() {
             *total_files_lock = 0;
         }
-        // WASM-specific code removed; async version is now used everywhere.
     }
 
     /// Get loading progress (0.0 to 1.0)
@@ -372,11 +390,10 @@ impl AppState {
             Ok(guard) => *guard,
             Err(_) => 0,
         };
-        let processed = self.file_loader.loaded_files.len() + self.file_loader.errors.len();
         if total == 0 {
             0.0
         } else {
-            processed as f32 / total as f32
+            self.file_loader.loaded_files.len() as f32 / total as f32
         }
     }
 
@@ -406,7 +423,7 @@ impl AppState {
             .file_loader
             .loaded_files
             .iter()
-            .any(|(p, _)| p == dropped_file.path.as_ref().unwrap());
+            .any(|(p, _, _)| p == dropped_file.path.as_ref().unwrap());
         if !self.file_loader.pending_files.contains(&dropped_file) && !already_loaded {
             self.file_loader.pending_files.push(dropped_file);
         }
@@ -439,7 +456,7 @@ impl AppState {
         let mut new_collection = RouteCollection::new(config);
 
         // Re-add all routes
-        for (_, gpx) in &self.file_loader.loaded_files {
+        for (_, gpx, _) in &self.file_loader.loaded_files {
             let _ = new_collection.add_route(gpx.clone());
         }
 

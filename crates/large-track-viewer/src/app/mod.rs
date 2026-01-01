@@ -240,6 +240,8 @@ impl LargeTrackViewerApp {
             ui_settings,
             file_loader,
             stats: Default::default(),
+            // Initialize the shared async RwLock used for selection throughout the app.
+            selected_route: Arc::new(tokio::sync::RwLock::new(None)),
             show_wheel_warning: false,
             wheel_warning_shown_at: None,
             pending_fit_bounds: false,
@@ -342,8 +344,16 @@ impl eframe::App for LargeTrackViewerApp {
             .show(ctx, |ui| {
                 profiling::scope!("map_panel");
 
-                let track_plugin =
-                    TrackPlugin::new(route_collection, line_width, show_outline, render_stats);
+                // Use the AppState's shared `selected_route` handle directly and pass it into the plugin.
+                // This centralizes selection in AppState so the plugin and the sidebar share the same lock.
+                let selected_handle = self.state.selected_route.clone();
+                let track_plugin = TrackPlugin::new(
+                    route_collection,
+                    line_width,
+                    show_outline,
+                    render_stats,
+                    selected_handle,
+                );
 
                 let query_start = instant::Instant::now();
 
@@ -442,7 +452,7 @@ impl eframe::App for LargeTrackViewerApp {
             .file_loader
             .loaded_files
             .iter()
-            .map(|(path, _)| path.to_string_lossy().to_string())
+            .map(|(path, _, _)| path.to_string_lossy().to_string())
             .collect();
 
         // Add pending files

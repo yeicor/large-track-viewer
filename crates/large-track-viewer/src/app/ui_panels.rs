@@ -231,15 +231,35 @@ fn render_tracks_tab(ui: &mut Ui, state: &mut AppState, is_portrait: bool) {
             .id_salt("loaded_files_scroll")
             .max_height(available_height - 8.0) // Leave small margin at bottom
             .show(ui, |ui| {
-                for (idx, (path, _)) in state.file_loader.loaded_files.iter().enumerate() {
+                for (idx, (path, _, start_idx)) in state.file_loader.loaded_files.iter().enumerate()
+                {
                     ui.horizontal(|ui| {
-                        ui.label(
-                            RichText::new(format!(
-                                "📄 {}",
-                                path.file_name().unwrap_or_default().to_string_lossy()
-                            ))
-                            .small(),
-                        );
+                        // File display name
+                        let file_name = path
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .to_string();
+
+                        // Determine whether this file's start index is the currently selected route
+                        let is_selected = if let Ok(guard) = state.selected_route.try_read() {
+                            match *guard {
+                                Some(sel) => sel == *start_idx,
+                                None => false,
+                            }
+                        } else {
+                            false
+                        };
+
+                        // Clickable/selectable label for selecting the file (selects the start route of this file)
+                        if ui
+                            .selectable_label(is_selected, format!("📄 {}", file_name))
+                            .clicked()
+                        {
+                            if let Ok(mut guard) = state.selected_route.try_write() {
+                                *guard = Some(*start_idx);
+                            }
+                        }
 
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.small_button("🗑").clicked() {

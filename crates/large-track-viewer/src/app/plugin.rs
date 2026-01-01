@@ -28,21 +28,25 @@ pub struct TrackPlugin {
     show_outline: bool,
     /// Shared statistics output (updated after each render)
     stats: Arc<RwLock<RenderStats>>,
+    /// Shared selected route handle (owned by AppState). Use tokio RwLock for cross-platform compatibility.
+    selected: Arc<tokio::sync::RwLock<Option<usize>>>,
 }
 
 impl TrackPlugin {
-    /// Create a new track plugin with a shared stats output
+    /// Create a new track plugin with a shared stats output and a shared selection handle
     pub fn new(
         collection: Arc<RwLock<RouteCollection>>,
         width: f32,
         show_outline: bool,
         stats: Arc<RwLock<RenderStats>>,
+        selected: Arc<tokio::sync::RwLock<Option<usize>>>,
     ) -> Self {
         Self {
             collection,
             width,
             show_outline,
             stats,
+            selected,
         }
     }
 
@@ -138,6 +142,43 @@ impl TrackPlugin {
 
         points_drawn
     }
+
+    /// Render a segment using an explicit highlight color/stroke (used for selected route)
+    fn render_segment_highlight(
+        &self,
+        segment: &SimplifiedSegment,
+        projector: &Projector,
+        painter: &egui::Painter,
+    ) {
+        let highlight_color = Color32::from_rgb(255, 200, 0);
+        let highlight_stroke = Stroke::new(self.width + 3.0, highlight_color);
+        let outline_stroke = Stroke::new(self.width + 5.0, Color32::from_black_alpha(200));
+
+        for part in &segment.parts {
+            let points = part.get_points_with_context(&segment.route);
+
+            if points.is_empty() {
+                continue;
+            }
+
+            let screen_points: Vec<egui::Pos2> = points
+                .iter()
+                .map(|waypoint| {
+                    let point = waypoint.point();
+                    let position = walkers::lat_lon(point.y(), point.x());
+                    let screen_vec = projector.project(position);
+                    egui::Pos2::new(screen_vec.x, screen_vec.y)
+                })
+                .collect();
+
+            if screen_points.len() >= 2 {
+                if self.show_outline {
+                    painter.add(egui::Shape::line(screen_points.clone(), outline_stroke));
+                }
+                painter.add(egui::Shape::line(screen_points, highlight_stroke));
+            }
+        }
+    }
 }
 
 impl Plugin for TrackPlugin {
@@ -196,12 +237,116 @@ impl Plugin for TrackPlugin {
                 }
             };
 
-            // Render all visible segments and count points
-            let mut total_points = 0;
+            // Handle map click to select nearest route.
+            // If the map area was clicked, find nearest visible route (by projected screen distance)
+            if response.clicked() {
+                // Retrieve the pointer position via the UI context (safe and available here).
+                if let Some(click_pos) = ui.ctx().input(|i| i.pointer.interact_pos()) {
+                    // Convert click to geographic and mercator
+                    let click_geo = projector.unproject(egui::Vec2::new(click_pos.x, click_pos.y));
+                    let click_merc =
+                        large_track_lib::utils::wgs84_to_mercator(click_geo.y(), click_geo.x());
+
+                    // Build a small query window around click (meters)
+                    let radius_m = 1000.0; // 1km search radius in mercator meters
+                    let query_rect = geo::Rect::new(
+                        geo::Coord {
+                            x: click_merc.x() - radius_m,
+                            y: click_merc.y() - radius_m,
+                        },
+                        geo::Coord {
+                            x: click_merc.x() + radius_m,
+                            y: click_merc.y() + radius_m,
+                        },
+                    );
+
+                    // Query segments near click (use same screen_size)
+                    let nearby_segments = if let Ok(collection) = self.collection.try_read() {
+                        collection.query_visible(query_rect, screen_size)
+                    } else {
+                        Vec::new()
+                    };
+
+                    // Compute nearest route among nearby_segments by screen-space distance
+                    let mut best: Option<(usize, f32)> = None; // (route_index, distance_pixels)
+                    for seg in &nearby_segments {
+                        for part in &seg.parts {
+                            // Use points with context for better hit testing
+                            let waypoints = part.get_points_with_context(&seg.route);
+                            for wp in waypoints {
+                                let p = wp.point();
+                                let pos = walkers::lat_lon(p.y(), p.x());
+                                let sv = projector.project(pos);
+                                let sp = egui::pos2(sv.x, sv.y);
+                                let dx = sp.x - click_pos.x;
+                                let dy = sp.y - click_pos.y;
+                                let dist = (dx * dx + dy * dy).sqrt();
+                                let entry = (seg.route_index, dist);
+                                match best {
+                                    Some((_, best_d)) => {
+                                        if dist < best_d {
+                                            best = Some(entry);
+                                        }
+                                    }
+                                    None => best = Some(entry),
+                                }
+                            }
+                        }
+                    }
+
+                    // Threshold (pixels) to consider a click a hit
+                    let hit_threshold = 12.0;
+                    if let Some((route_idx, dist)) = best {
+                        if dist <= hit_threshold {
+                            if let Ok(mut guard) = self.selected.try_write() {
+                                *guard = Some(route_idx);
+                            }
+                        } else {
+                            if let Ok(mut guard) = self.selected.try_write() {
+                                *guard = None;
+                            }
+                        }
+                    } else {
+                        if let Ok(mut guard) = self.selected.try_write() {
+                            *guard = None;
+                        }
+                    }
+                }
+            }
+
+            // Render all visible segments and count points.
+            // We render non-selected routes first, then selected route(s) on top.
+            let mut total_points = 0usize;
             {
                 profiling::scope!("render_segments");
+
+                let selected = if let Ok(guard) = self.selected.try_read() {
+                    *guard
+                } else {
+                    None
+                };
+
+                // First pass: non-selected
                 for segment in &segments {
+                    if Some(segment.route_index) == selected {
+                        continue;
+                    }
                     total_points += self.render_segment(segment, projector, painter);
+                }
+
+                // Second pass: selected route(s) drawn on top with highlight
+                if let Some(sel_idx) = selected {
+                    for segment in &segments {
+                        if segment.route_index == sel_idx {
+                            // count points using the regular renderer for stats, but draw highlight
+                            // We'll count simplified points for stats
+                            for part in &segment.parts {
+                                let pts = part.get_simplified_points(&segment.route);
+                                total_points += pts.len();
+                            }
+                            self.render_segment_highlight(segment, projector, painter);
+                        }
+                    }
                 }
             }
 
