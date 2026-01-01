@@ -11,6 +11,25 @@ use large_track_lib::{Config, RouteCollection};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+/// Generate a stable synthetic path for a dropped file when a real path is unavailable.
+/// Web-dropped files often don't include a filesystem path. We use a "web://" prefix
+/// combined with a unique atomic counter and the file size (when available) to
+/// produce a unique identifier for web-only dropped files. If a real filesystem
+/// path is present, it is returned unchanged.
+fn synthetic_path_for(dropped: &DroppedFile) -> PathBuf {
+    if let Some(p) = dropped.path.as_ref() {
+        p.clone()
+    } else {
+        // Keep the counter static inside this function to avoid requiring a top-level import.
+        static SYNTHETIC_COUNTER: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(1);
+        let id = SYNTHETIC_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let size = dropped.bytes.as_ref().map(|b| b.len()).unwrap_or(0);
+        // Produce a URI-like synthetic identifier: web://<id>-<size>-<name>
+        PathBuf::from(format!("web://{}-{}-{}", id, size, dropped.name))
+    }
+}
+
 /// Main application state
 pub struct AppState {
     /// Route collection with all loaded tracks
@@ -251,6 +270,14 @@ impl AppState {
         // Set the totals and reset counters
         let files_len = files_to_load.len();
 
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            // Ensure the total_files is updated; block until we can acquire the lock on native.
+            async_runtime::blocking_write(&total_files, |v| {
+                *v = files_len;
+            });
+        }
+        #[cfg(target_arch = "wasm32")]
         {
             if let Ok(mut total_files_lock) = total_files.try_write() {
                 *total_files_lock = files_len;
@@ -277,14 +304,9 @@ impl AppState {
                 let permit = semaphore.acquire_owned().await.unwrap();
                 let result = Self::load_file_to_gpx(&dropped_file).await;
                 {
-                    // Use a safe path for results: prefer the actual filesystem path when available,
-                    // otherwise fall back to a name-based synthetic path (useful for web where
-                    // dropped files may not have a real filesystem path).
-                    let path = if let Some(p) = dropped_file.path.clone() {
-                        p
-                    } else {
-                        PathBuf::from(dropped_file.name.clone())
-                    };
+                    // Compute a stable identifier for this file (real path when available,
+                    // synthetic web://<name> otherwise).
+                    let path = synthetic_path_for(&dropped_file);
                     results.write().await.push((path, result));
                 }
                 drop(permit); // release semaphore
@@ -299,6 +321,15 @@ impl AppState {
     /// Returns true if there are more results to process.
     pub fn process_parallel_results(&mut self) -> bool {
         // Check if we're done (all added)
+        #[cfg(not(target_arch = "wasm32"))]
+        let total = {
+            let mut tmp = 0usize;
+            async_runtime::blocking_read(&self.file_loader.parallel_total_files, |v| {
+                tmp = *v;
+            });
+            tmp
+        };
+        #[cfg(target_arch = "wasm32")]
         let total = match self.file_loader.parallel_total_files.try_read() {
             Ok(guard) => *guard,
             Err(_) => 0,
@@ -312,6 +343,22 @@ impl AppState {
 
         // Process exactly one result per frame to keep UI fluid during indexing
         // Take one result (non-blocking)
+        #[cfg(not(target_arch = "wasm32"))]
+        let result: Option<(PathBuf, Result<gpx::Gpx, String>)> = {
+            let mut out: Option<(PathBuf, Result<gpx::Gpx, String>)> = None;
+            async_runtime::blocking_write(
+                &self.file_loader.parallel_load_results,
+                |results_lock| {
+                    if results_lock.is_empty() {
+                        // leave None
+                    } else {
+                        out = Some(results_lock.remove(0));
+                    }
+                },
+            );
+            out
+        };
+        #[cfg(target_arch = "wasm32")]
         let result: Option<(PathBuf, Result<gpx::Gpx, String>)> = {
             if let Ok(mut results_lock) = self.file_loader.parallel_load_results.try_write() {
                 if results_lock.is_empty() {
@@ -334,18 +381,37 @@ impl AppState {
                 // Add this single route to the collection and record the starting index
                 let mut start_idx_opt: Option<usize> = None;
                 let add_result = {
-                    if let Ok(mut collection) = self.route_collection.try_write() {
-                        // The route will be appended; record the index where it will be inserted.
-                        let start_idx = collection.route_count();
-                        let res = collection.add_route(gpx.clone());
-                        if res.is_ok() {
-                            start_idx_opt = Some(start_idx);
-                        }
-                        res
-                    } else {
-                        Err(large_track_lib::DataError::InvalidGeometry(
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        let mut res_opt = Err(large_track_lib::DataError::InvalidGeometry(
                             "Could not acquire write lock on route_collection".to_string(),
-                        ))
+                        ));
+                        async_runtime::blocking_write(&self.route_collection, |collection| {
+                            // The route will be appended; record the index where it will be inserted.
+                            let start_idx = collection.route_count();
+                            let res = collection.add_route(gpx.clone());
+                            if res.is_ok() {
+                                start_idx_opt = Some(start_idx);
+                            }
+                            res_opt = res;
+                        });
+                        res_opt
+                    }
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        if let Ok(mut collection) = self.route_collection.try_write() {
+                            // The route will be appended; record the index where it will be inserted.
+                            let start_idx = collection.route_count();
+                            let res = collection.add_route(gpx.clone());
+                            if res.is_ok() {
+                                start_idx_opt = Some(start_idx);
+                            }
+                            res
+                        } else {
+                            Err(large_track_lib::DataError::InvalidGeometry(
+                                "Could not acquire write lock on route_collection".to_string(),
+                            ))
+                        }
                     }
                 };
 
@@ -358,23 +424,45 @@ impl AppState {
                         self.pending_fit_bounds = true;
                     }
                     Err(e) => {
+                        // Format a user-facing error message, push to the error list and set a transient last_error
+                        let err_msg = format!("Failed to add route: {}", e);
+                        // Push the error record (clone path so we preserve semantics)
                         self.file_loader
                             .errors
-                            .push((path, format!("Failed to add route: {}", e)));
+                            .push((path.clone(), err_msg.clone()));
                     }
                 }
                 // No need to increment a processed counter; progress is now based on loaded_files + errors.
             }
             Err(e) => {
+                // Preserve the error String for both storage and transient UI feedback.
                 self.file_loader.errors.push((path, e));
-                if let Ok(mut total_lock) = self.file_loader.parallel_total_files.try_write() {
-                    *total_lock -= 1;
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    async_runtime::blocking_write(&self.file_loader.parallel_total_files, |v| {
+                        *v -= 1;
+                    });
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    if let Ok(mut total_lock) = self.file_loader.parallel_total_files.try_write() {
+                        *total_lock -= 1;
+                    }
                 }
                 // No need to increment a processed counter; progress is now based on loaded_files + errors.
             }
         }
 
         // Return true if there are more results to process or still loading
+        #[cfg(not(target_arch = "wasm32"))]
+        let more_results = {
+            let mut empty = false;
+            async_runtime::blocking_read(&self.file_loader.parallel_load_results, |results_lock| {
+                empty = results_lock.is_empty();
+            });
+            !empty
+        };
+        #[cfg(target_arch = "wasm32")]
         let more_results = match self.file_loader.parallel_load_results.try_read() {
             Ok(results_lock) => !results_lock.is_empty(),
             Err(_) => false,
@@ -384,6 +472,33 @@ impl AppState {
 
     /// Check if parallel loading is in progress
     pub fn is_parallel_loading(&self) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        let total = {
+            let mut tmp = 0usize;
+            async_runtime::blocking_read(&self.file_loader.parallel_total_files, |v| {
+                tmp = *v;
+            });
+            tmp
+        };
+        #[cfg(target_arch = "wasm32")]
+        #[cfg(not(target_arch = "wasm32"))]
+        let total = {
+            let mut tmp = 0usize;
+            async_runtime::blocking_read(&self.file_loader.parallel_total_files, |v| {
+                tmp = *v;
+            });
+            tmp
+        };
+        #[cfg(target_arch = "wasm32")]
+        #[cfg(not(target_arch = "wasm32"))]
+        let total = {
+            let mut tmp = 0usize;
+            async_runtime::blocking_read(&self.file_loader.parallel_total_files, |v| {
+                tmp = *v;
+            });
+            tmp
+        };
+        #[cfg(target_arch = "wasm32")]
         let total = match self.file_loader.parallel_total_files.try_read() {
             Ok(guard) => *guard,
             Err(_) => 0,
@@ -393,8 +508,17 @@ impl AppState {
 
     /// Reset parallel loading state (called when all routes are added)
     fn reset_parallel_loading(&mut self) {
-        if let Ok(mut total_files_lock) = self.file_loader.parallel_total_files.try_write() {
-            *total_files_lock = 0;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            async_runtime::blocking_write(&self.file_loader.parallel_total_files, |v| {
+                *v = 0;
+            });
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            if let Ok(mut total_files_lock) = self.file_loader.parallel_total_files.try_write() {
+                *total_files_lock = 0;
+            }
         }
     }
 
@@ -433,18 +557,14 @@ impl AppState {
 
     /// Add a file to the pending load queue
     pub fn queue_file(&mut self, dropped_file: DroppedFile) {
-        let already_loaded = self.file_loader.loaded_files.iter().any(|(p, _, _)| {
-            // If the dropped file has a real filesystem path, compare against it.
-            // Otherwise (e.g. browser-dropped files), fall back to comparing by filename.
-            if let Some(dp) = dropped_file.path.as_ref() {
-                p.as_path() == dp
-            } else {
-                p.file_name()
-                    .and_then(|n| n.to_str())
-                    .map(|s| s == dropped_file.name)
-                    .unwrap_or(false)
-            }
-        });
+        // Use a stable file identifier (prefers real path, falls back to a synthetic web://<name>)
+        let file_id = synthetic_path_for(&dropped_file);
+        let already_loaded = self
+            .file_loader
+            .loaded_files
+            .iter()
+            .any(|(p, _, _)| p == &file_id);
+
         if !self.file_loader.pending_files.contains(&dropped_file) && !already_loaded {
             self.file_loader.pending_files.push(dropped_file);
         }
@@ -469,6 +589,15 @@ impl AppState {
         profiling::scope!("rebuild_collection");
 
         // Create new collection with updated bias
+        #[cfg(not(target_arch = "wasm32"))]
+        let old_config = {
+            let mut cfg_opt: Option<large_track_lib::Config> = None;
+            async_runtime::blocking_read(&self.route_collection, |guard| {
+                cfg_opt = Some(guard.config().clone());
+            });
+            cfg_opt.expect("route_collection read should eventually succeed")
+        };
+        #[cfg(target_arch = "wasm32")]
         let old_config = match self.route_collection.try_read() {
             Ok(guard) => guard.config().clone(),
             Err(_) => return, // Skip if lock is not available

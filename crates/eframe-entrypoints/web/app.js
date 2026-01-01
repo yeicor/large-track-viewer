@@ -110,29 +110,6 @@ function getPlatformDisplayName(platform) {
   }
 }
 
-async function fetchLatestRelease(githubRepo) {
-  try {
-    const response = await fetch(
-      `https://api.github.com/repos/${githubRepo}/releases/latest`,
-      {
-        headers: {
-          Accept: "application/vnd.github.v3+json",
-        },
-      },
-    );
-
-    if (!response.ok) {
-      console.warn("Failed to fetch latest release:", response.status);
-      return null;
-    }
-
-    return await response.json();
-  } catch (error) {
-    console.warn("Error fetching release:", error);
-    return null;
-  }
-}
-
 function findMatchingAsset(release, platform) {
   const pattern = getAssetPattern(platform);
   if (!pattern || !release?.assets) return null;
@@ -177,35 +154,12 @@ async function initNativeAppBanner() {
     return;
   }
 
-  // Fetch latest release from GitHub
-  const release = await fetchLatestRelease(githubRepo);
-
-  if (!release) {
-    // Fallback to releases page
-    downloadLink.href = `https://github.com/${githubRepo}/releases/latest`;
-    if (bannerText) {
-      bannerText.textContent = `Get better performance with ${appName} for ${platformName}!`;
-    }
-    banner.style.display = "block";
-  } else {
-    // Try to find a matching asset for the platform
-    const asset = findMatchingAsset(release, platform);
-
-    if (asset) {
-      downloadLink.href = asset.browser_download_url;
-      if (bannerText) {
-        bannerText.textContent = `Get better performance with ${appName} for ${platformName}!`;
-      }
-    } else {
-      // Fallback to releases page if no matching asset
-      downloadLink.href = `https://github.com/${githubRepo}/releases/latest`;
-      if (bannerText) {
-        bannerText.textContent = `Get better performance with ${appName}!`;
-      }
-    }
-
-    banner.style.display = "block";
+  // Link to releases page
+  downloadLink.href = `https://github.com/${githubRepo}/releases/latest`;
+  if (bannerText) {
+    bannerText.textContent = `Get better performance with ${appName} for ${platformName}!`;
   }
+  banner.style.display = "block";
 
   // Handle dismiss
   dismissBtn.onclick = () => {

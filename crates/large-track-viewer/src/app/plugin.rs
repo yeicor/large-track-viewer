@@ -219,10 +219,22 @@ impl Plugin for TrackPlugin {
             let screen_size = (viewport_rect.width() as f64, viewport_rect.height() as f64);
             let segments: Vec<SimplifiedSegment> = {
                 profiling::scope!("query_visible");
-                if let Ok(collection) = self.collection.try_read() {
-                    collection.query_visible(viewport, screen_size)
-                } else {
-                    Vec::new()
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    // Block briefly on native to ensure we get a consistent result
+                    eframe_entrypoints::async_runtime::blocking_read(
+                        &self.collection,
+                        |collection| collection.query_visible(viewport, screen_size),
+                    )
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    // On web avoid blocking the main thread; fall back to try_read.
+                    if let Ok(collection) = self.collection.try_read() {
+                        collection.query_visible(viewport, screen_size)
+                    } else {
+                        Vec::new()
+                    }
                 }
             };
 
@@ -250,6 +262,12 @@ impl Plugin for TrackPlugin {
                     );
 
                     // Query segments near click (use same screen_size)
+                    #[cfg(not(target_arch = "wasm32"))]
+                    let nearby_segments = eframe_entrypoints::async_runtime::blocking_read(
+                        &self.collection,
+                        |collection| collection.query_visible(query_rect, screen_size),
+                    );
+                    #[cfg(target_arch = "wasm32")]
                     let nearby_segments = if let Ok(collection) = self.collection.try_read() {
                         collection.query_visible(query_rect, screen_size)
                     } else {
@@ -287,17 +305,47 @@ impl Plugin for TrackPlugin {
                     let hit_threshold = 12.0;
                     if let Some((route_idx, dist)) = best {
                         if dist <= hit_threshold {
-                            if let Ok(mut guard) = self.selected.try_write() {
-                                *guard = Some(route_idx);
+                            #[cfg(not(target_arch = "wasm32"))]
+                            {
+                                eframe_entrypoints::async_runtime::blocking_write(
+                                    &self.selected,
+                                    |g| *g = Some(route_idx),
+                                );
+                            }
+                            #[cfg(target_arch = "wasm32")]
+                            {
+                                if let Ok(mut guard) = self.selected.try_write() {
+                                    *guard = Some(route_idx);
+                                }
                             }
                         } else {
-                            if let Ok(mut guard) = self.selected.try_write() {
-                                *guard = None;
+                            #[cfg(not(target_arch = "wasm32"))]
+                            {
+                                eframe_entrypoints::async_runtime::blocking_write(
+                                    &self.selected,
+                                    |g| *g = None,
+                                );
+                            }
+                            #[cfg(target_arch = "wasm32")]
+                            {
+                                if let Ok(mut guard) = self.selected.try_write() {
+                                    *guard = None;
+                                }
                             }
                         }
                     } else {
-                        if let Ok(mut guard) = self.selected.try_write() {
-                            *guard = None;
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            eframe_entrypoints::async_runtime::blocking_write(
+                                &self.selected,
+                                |g| *g = None,
+                            );
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            if let Ok(mut guard) = self.selected.try_write() {
+                                *guard = None;
+                            }
                         }
                     }
                 }
@@ -309,10 +357,23 @@ impl Plugin for TrackPlugin {
             {
                 profiling::scope!("render_segments");
 
-                let selected = if let Ok(guard) = self.selected.try_read() {
-                    *guard
-                } else {
-                    None
+                let selected = {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        let mut tmp: Option<usize> = None;
+                        eframe_entrypoints::async_runtime::blocking_read(&self.selected, |g| {
+                            tmp = *g;
+                        });
+                        tmp
+                    }
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        if let Ok(guard) = self.selected.try_read() {
+                            *guard
+                        } else {
+                            None
+                        }
+                    }
                 };
 
                 // First pass: non-selected
@@ -341,9 +402,19 @@ impl Plugin for TrackPlugin {
 
             // Update shared statistics
             {
-                if let Ok(mut stats) = self.stats.try_write() {
-                    stats.segments_rendered = segments.len();
-                    stats.simplified_points_rendered = total_points;
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    eframe_entrypoints::async_runtime::blocking_write(&self.stats, |s| {
+                        s.segments_rendered = segments.len();
+                        s.simplified_points_rendered = total_points;
+                    });
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    if let Ok(mut stats) = self.stats.try_write() {
+                        stats.segments_rendered = segments.len();
+                        stats.simplified_points_rendered = total_points;
+                    }
                 }
             }
         }

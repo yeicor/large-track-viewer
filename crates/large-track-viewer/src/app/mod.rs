@@ -10,6 +10,7 @@
 mod plugin;
 pub(crate) mod settings;
 mod state;
+pub mod storage;
 mod ui_panels;
 
 use crate::app::plugin::{RenderStats, TrackPlugin};
@@ -146,13 +147,69 @@ impl LargeTrackViewerApp {
     }
 
     /// Load persisted settings from storage (fast, no route data)
+    ///
+    /// Behavior:
+    /// 1. Try eframe's provided `storage` first (this covers most desktop & web runner cases).
+    /// 2. If not present there, try the platform backend:
+    ///    - On web: use the browser localStorage backend (direct default backend function).
+    ///    - On native: use the file-backed backend (returns Result<Box<dyn StorageBackend>, ...>).
     fn load_persisted_settings(storage: &dyn eframe::Storage, cli_args: &Settings) -> AppState {
+        // 1) Try eframe storage first
         if let Some(json) = storage.get_string("persisted_settings")
             && !json.is_empty()
             && let Ok(settings) = serde_json::from_str::<PersistedSettings>(&json)
         {
-            tracing::info!("Restored settings, will reload files");
+            tracing::info!("Restored settings from eframe storage, will reload files");
             return Self::state_from_persisted_settings(settings, cli_args);
+        }
+
+        // 2) Try platform default storage backend (use free JSON helper to read structured settings)
+        #[cfg(target_arch = "wasm32")]
+        {
+            // On web the default backend returns a concrete backend directly; use it and attempt to load JSON.
+            let backend = crate::app::storage::default_storage_backend();
+            match crate::app::storage::load_json_backend::<PersistedSettings>(
+                backend.as_ref(),
+                "persisted_settings",
+            ) {
+                Ok(Some(settings)) => {
+                    tracing::info!(
+                        "Restored settings from platform backend (web localStorage), will reload files"
+                    );
+                    return Self::state_from_persisted_settings(settings, cli_args);
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::debug!("Error reading platform persisted settings (web): {:?}", e)
+                }
+            }
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            // On native the default backend may return a Result (file backend). Handle initialization errors.
+            match crate::app::storage::default_storage_backend() {
+                Ok(backend_box) => {
+                    let backend = backend_box.as_ref();
+                    match crate::app::storage::load_json_backend::<PersistedSettings>(
+                        backend,
+                        "persisted_settings",
+                    ) {
+                        Ok(Some(settings)) => {
+                            tracing::info!(
+                                "Restored settings from platform backend (file storage), will reload files"
+                            );
+                            return Self::state_from_persisted_settings(settings, cli_args);
+                        }
+                        Ok(None) => {}
+                        Err(e) => tracing::debug!(
+                            "Error reading platform persisted settings (file): {:?}",
+                            e
+                        ),
+                    }
+                }
+                Err(e) => tracing::debug!("Platform storage backend not available: {:?}", e),
+            }
         }
 
         tracing::info!("No persisted settings found, starting fresh");
@@ -445,25 +502,28 @@ impl eframe::App for LargeTrackViewerApp {
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         // Save settings only (no route data - fast)
-        // Include ALL file paths: loaded, pending, and currently loading
-        // This ensures we don't lose files if the app is closed during loading
+        // Include ONLY real filesystem paths (skip synthetic web:// identifiers).
+        // We intentionally do NOT persist browser-only dropped files (which are identified
+        // by the synthetic web:// prefix) because they are not reloadable from disk.
         let mut all_file_paths: Vec<String> = self
             .state
             .file_loader
             .loaded_files
             .iter()
             .map(|(path, _, _)| path.to_string_lossy().to_string())
+            // Filter out synthetic web-only paths (we use "web://" prefix for those)
+            .filter(|s| !s.starts_with("web://"))
             .collect();
 
-        // Add pending files
+        // Add pending files (only persist those with a real filesystem path)
         for path in &self.state.file_loader.pending_files {
-            let path_str = path
-                .path
-                .as_ref()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_default();
-            if !all_file_paths.contains(&path_str) {
-                all_file_paths.push(path_str);
+            if let Some(p) = path.path.as_ref() {
+                let path_str = p.to_string_lossy().to_string();
+                if !all_file_paths.contains(&path_str) {
+                    all_file_paths.push(path_str);
+                }
+            } else {
+                // Skip browser-dropped files without a real path (do not persist)
             }
         }
 
@@ -472,6 +532,10 @@ impl eframe::App for LargeTrackViewerApp {
             if let Ok(results) = self.state.file_loader.parallel_load_results.try_read() {
                 for (path, _) in results.iter() {
                     let path_str: String = path.to_string_lossy().to_string();
+                    // Skip synthetic web-only identifiers
+                    if path_str.starts_with("web://") {
+                        continue;
+                    }
                     if !all_file_paths.contains(&path_str) {
                         all_file_paths.push(path_str);
                     }
@@ -479,7 +543,10 @@ impl eframe::App for LargeTrackViewerApp {
             }
         }
 
-        let loaded_file_paths = all_file_paths;
+        let loaded_file_paths: Vec<String> = all_file_paths
+            .into_iter()
+            .filter(|p| !p.starts_with("web://"))
+            .collect();
 
         let settings = PersistedSettings {
             line_width: self.state.ui_settings.line_width,
@@ -492,9 +559,49 @@ impl eframe::App for LargeTrackViewerApp {
             loaded_file_paths,
         };
 
+        // Serialize settings once and persist to both eframe storage and the platform backend.
         if let Ok(json) = serde_json::to_string(&settings) {
-            storage.set_string("persisted_settings", json);
-            tracing::debug!("Saved settings on exit");
+            // Persist to eframe storage (existing behavior)
+            storage.set_string("persisted_settings", json.clone());
+            tracing::debug!("Saved settings to eframe storage on exit");
+
+            // Persist to platform-specific default storage backend using the object-safe helpers.
+            // On web: default_storage_backend() returns a concrete backend (Box<dyn StorageBackend>).
+            // On native: default_storage_backend() returns Result<Box<dyn StorageBackend>, StorageError>.
+            #[cfg(target_arch = "wasm32")]
+            {
+                let backend = crate::app::storage::default_storage_backend();
+                match crate::app::storage::save_json_backend(
+                    backend.as_ref(),
+                    "persisted_settings",
+                    &settings,
+                ) {
+                    Ok(()) => tracing::debug!("Saved settings to web storage (localStorage)"),
+                    Err(e) => tracing::warn!("Failed to save settings to web storage: {:?}", e),
+                }
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                match crate::app::storage::default_storage_backend() {
+                    Ok(backend_box) => {
+                        let backend = backend_box.as_ref();
+                        match crate::app::storage::save_json_backend(
+                            backend,
+                            "persisted_settings",
+                            &settings,
+                        ) {
+                            Ok(()) => tracing::debug!("Saved settings to file storage"),
+                            Err(e) => {
+                                tracing::warn!("Failed to save settings to file storage: {:?}", e)
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to initialize file storage backend: {:?}", e);
+                    }
+                }
+            }
         }
     }
 }

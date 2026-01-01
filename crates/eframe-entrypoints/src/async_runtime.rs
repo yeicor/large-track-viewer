@@ -67,9 +67,86 @@ pub fn in_runtime_context() -> bool {
 }
 
 /// Check if we're running inside a tokio runtime context (native only).
-/// On web, this always returns true since tasks run on the JS event loop.
+/// On web, this always returns true since tokio-with-wasm uses the JS event loop.
 #[cfg(target_arch = "wasm32")]
 pub fn in_runtime_context() -> bool {
     // On web, we're always "in context" since tokio-with-wasm uses the JS event loop
     true
 }
+
+// ---------------------------------------------------------------------------
+// Lock helpers
+//
+// Provide safe cooperative helpers for acquiring async RwLock access in a
+// way that avoids silent failure when callers used `try_read`/`try_write`.
+//
+// - `with_read` / `with_write` are async helpers that await the lock and then
+//   invoke a provided closure while holding the guard. These avoid returning
+//   the guard across an await point (which is not possible for `async fn`).
+// - `blocking_read` / `blocking_write` are synchronous helpers available only
+//   on native targets; they spin using `try_read`/`try_write` and yield the
+//   thread between attempts. Spinning on wasm would hang the event loop, so
+//   these are intentionally not provided on wasm.
+// ---------------------------------------------------------------------------
+
+/// Acquire a read lock and run a closure while holding it.
+/// This is the recommended approach on both native and web (await the future).
+/// The closure runs synchronously while the guard is held.
+pub async fn with_read<T, R, F>(lock: &RwLock<T>, f: F) -> R
+where
+    F: FnOnce(&T) -> R + Send,
+    R: Send,
+{
+    let guard = lock.read().await;
+    f(&*guard)
+}
+
+/// Acquire a write lock and run a closure while holding it.
+/// This is the recommended approach on both native and web (await the future).
+/// The closure runs synchronously while the guard is held.
+pub async fn with_write<T, R, F>(lock: &RwLock<T>, f: F) -> R
+where
+    F: FnOnce(&mut T) -> R + Send,
+    R: Send,
+{
+    let mut guard = lock.write().await;
+    f(&mut *guard)
+}
+
+// Synchronous blocking helpers (native-only).
+// These repeatedly attempt `try_read`/`try_write` and yield the current thread
+// between attempts. This ensures the operation will eventually complete on
+// native platforms while avoiding silent skipping of work when a lock is busy.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn blocking_read<T, R, F>(lock: &RwLock<T>, f: F) -> R
+where
+    F: FnOnce(&T) -> R,
+{
+    loop {
+        if let Ok(guard) = lock.try_read() {
+            return f(&*guard);
+        }
+        // Let the scheduler run other threads/tasks before retrying
+        std::thread::yield_now();
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn blocking_write<T, R, F>(lock: &RwLock<T>, f: F) -> R
+where
+    F: FnOnce(&mut T) -> R,
+{
+    loop {
+        if let Ok(mut guard) = lock.try_write() {
+            return f(&mut *guard);
+        }
+        // Let the scheduler run other threads/tasks before retrying
+        std::thread::yield_now();
+    }
+}
+
+// Note for wasm:
+// - We do NOT provide spinning/blocking helpers on wasm because blocking the
+//   browser main thread would freeze the UI and starve the event loop.
+// - On web, callers should use `with_read` / `with_write` (await) to safely
+//   acquire locks cooperatively.
