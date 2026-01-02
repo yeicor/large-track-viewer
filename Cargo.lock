@@ -1318,7 +1318,7 @@ dependencies = [
 
 [[package]]
 name = "eframe-entrypoints"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "android_logger",
  "clap",
@@ -2742,7 +2742,7 @@ dependencies = [
 
 [[package]]
 name = "large-track-lib"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "criterion",
  "dashmap",
@@ -2758,7 +2758,7 @@ dependencies = [
 
 [[package]]
 name = "large-track-viewer"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "clap",
  "console_error_panic_hook",
