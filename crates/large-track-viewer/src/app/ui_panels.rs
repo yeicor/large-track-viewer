@@ -8,6 +8,10 @@ use egui::{Color32, RichText, Ui};
 
 /// Render the sidebar toggle button (overlaid on top-right of map)
 pub fn sidebar_toggle_button(ui: &mut Ui, state: &mut AppState) {
+    // UI panel specific profiling scope to help attribute time spent in UI layout/draw.
+    #[cfg(feature = "profiling")]
+    profiling::scope!("ui::sidebar_toggle_button");
+
     let button_size = egui::vec2(40.0, 40.0);
     let margin = 10.0;
 
@@ -53,6 +57,10 @@ pub fn sidebar_toggle_button(ui: &mut Ui, state: &mut AppState) {
 
 /// Render the main sidebar (responsive: side on landscape, bottom on portrait)
 pub fn render_sidebar(ctx: &egui::Context, state: &mut AppState) {
+    // Scope the overall sidebar rendering so it is visible in profiling traces.
+    #[cfg(feature = "profiling")]
+    profiling::scope!("ui::render_sidebar");
+
     if !state.ui_settings.sidebar_open {
         return;
     }
@@ -69,30 +77,40 @@ pub fn render_sidebar(ctx: &egui::Context, state: &mut AppState) {
 
 /// Render sidebar from the side (landscape mode)
 fn render_sidebar_side(ctx: &egui::Context, state: &mut AppState) {
+    #[cfg(feature = "profiling")]
+    profiling::scope!("ui::render_sidebar_side");
+
     egui::SidePanel::right("main_sidebar")
         .default_width(300.0)
         .min_width(260.0)
         .max_width(450.0)
         .resizable(true)
         .show(ctx, |ui| {
-            render_sidebar_content(ui, state, false);
+            render_sidebar_content(ui, state);
         });
 }
 
 /// Render sidebar from the bottom (portrait mode)
 fn render_sidebar_bottom(ctx: &egui::Context, state: &mut AppState) {
+    #[cfg(feature = "profiling")]
+    profiling::scope!("ui::render_sidebar_bottom");
+
     egui::TopBottomPanel::bottom("main_sidebar")
         .default_height(280.0)
         .min_height(180.0)
         .max_height(ctx.viewport_rect().height() * 0.6)
         .resizable(true)
         .show(ctx, |ui| {
-            render_sidebar_content(ui, state, true);
+            render_sidebar_content(ui, state);
         });
 }
 
 /// Render the sidebar content (shared between portrait and landscape)
-fn render_sidebar_content(ui: &mut Ui, state: &mut AppState, is_portrait: bool) {
+fn render_sidebar_content(ui: &mut Ui, state: &mut AppState) {
+    // Per-panel profiling scope to capture user interactions & layout cost for the sidebar content.
+    #[cfg(feature = "profiling")]
+    profiling::scope!("ui::render_sidebar_content");
+
     // Tab selection
     ui.horizontal(|ui| {
         ui.selectable_value(
@@ -113,45 +131,35 @@ fn render_sidebar_content(ui: &mut Ui, state: &mut AppState, is_portrait: bool) 
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| match state.ui_settings.active_tab {
-            SidebarTab::Tracks => render_tracks_tab(ui, state, is_portrait),
+            SidebarTab::Tracks => render_tracks_tab(ui, state),
             SidebarTab::Settings => render_settings_tab(ui, state),
         });
 }
 
 /// Render the Tracks tab
-fn render_tracks_tab(ui: &mut Ui, state: &mut AppState, is_portrait: bool) {
+fn render_tracks_tab(ui: &mut Ui, state: &mut AppState) {
+    // Top-level profiling scope for the tracks tab UI (buttons, progress, lists).
+    #[cfg(feature = "profiling")]
+    profiling::scope!("ui::render_tracks_tab");
+
     // Action buttons at top
-    if is_portrait {
-        ui.vertical(|ui| {
-            ui.horizontal(|ui| {
-                ui.group(|ui| {
-                    #[cfg(target_arch = "wasm32")]
-                    ui.disable();
-                    if ui.button("📂 Load GPX Files...").clicked() {
-                        state.file_loader.show_picker = true;
-                    }
-                });
-                if ui.button("🎯 Fit to Bounds").clicked() {
-                    state.pending_fit_bounds = true;
-                }
-                if ui.button("🗑 Clear All").clicked() {
-                    state.clear_routes();
+    ui.vertical(|ui| {
+        ui.horizontal(|ui| {
+            ui.scope(|ui| {
+                #[cfg(target_arch = "wasm32")]
+                ui.disable();
+                if ui.button("📂 Load").clicked() {
+                    state.file_loader.show_picker = true;
                 }
             });
-        });
-    } else {
-        ui.horizontal(|ui| {
-            if ui.button("📂 Load GPX Files...").clicked() {
-                state.file_loader.show_picker = true;
-            }
-            if ui.button("🎯 Fit to Bounds").clicked() {
+            if ui.button("🎯 Fit").clicked() {
                 state.pending_fit_bounds = true;
             }
-            if ui.button("🗑 Clear All").clicked() {
+            if ui.button("🗑 Clear").clicked() {
                 state.clear_routes();
             }
         });
-    }
+    });
 
     ui.add_space(8.0);
 
@@ -281,6 +289,11 @@ fn render_tracks_tab(ui: &mut Ui, state: &mut AppState, is_portrait: bool) {
 
 /// Render statistics section (used in Tracks tab)
 fn render_stats_section(ui: &mut Ui, state: &AppState) {
+    // Profiling scope for the stats rendering since it's often used to surface
+    // performance numbers; seeing this in traces helps correlate UI cost with data.
+    #[cfg(feature = "profiling")]
+    profiling::scope!("ui::render_stats_section");
+
     ui.label(RichText::new("📊 Statistics").strong());
     ui.add_space(4.0);
 
@@ -350,6 +363,10 @@ fn render_stats_section(ui: &mut Ui, state: &AppState) {
 
 /// Render the Settings tab
 fn render_settings_tab(ui: &mut Ui, state: &mut AppState) {
+    // Per-settings panel profiling scope so toggling and slider interactions are visible.
+    #[cfg(feature = "profiling")]
+    profiling::scope!("ui::render_settings_tab");
+
     // Track Appearance section
     ui.label(RichText::new("🎨 Track Appearance").strong());
     ui.add_space(6.0);

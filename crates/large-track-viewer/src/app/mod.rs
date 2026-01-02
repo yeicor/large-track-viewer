@@ -501,6 +501,10 @@ impl eframe::App for LargeTrackViewerApp {
             self.restored_persisted_state = true;
             self.fit_to_bounds();
         }
+
+        // Mark end of frame for profiling backends that require an explicit frame finish.
+        // This is a no-op when profiling is disabled.
+        eframe_entrypoints::finish_profiling_frame();
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {

@@ -39,6 +39,7 @@ pub struct SegmentPart {
     pub simplified_indices: Vec<usize>,
 }
 
+#[cfg_attr(feature = "profiling", profiling::all_functions)]
 impl SimplifiedSegment {
     /// Create a new simplified segment
     pub fn new(route: Arc<Route>, route_index: usize, parts: Vec<SegmentPart>) -> Self {
@@ -71,6 +72,7 @@ impl SimplifiedSegment {
     }
 }
 
+#[cfg_attr(feature = "profiling", profiling::all_functions)]
 impl SegmentPart {
     /// Create a new segment part
     pub fn new(
@@ -92,6 +94,10 @@ impl SegmentPart {
     /// This is used for boundary context to ensure smooth line rendering
     /// at the edges of viewport-clipped segments.
     pub fn get_prev_point<'a>(&self, route: &'a Route) -> Option<&'a gpx::Waypoint> {
+        // Per-function profiling scope to make boundary context lookups visible in traces.
+        #[cfg(feature = "profiling")]
+        profiling::scope!("segment::get_prev_point");
+
         if self.point_range.start == 0 {
             return None; // First point in segment
         }
@@ -111,6 +117,10 @@ impl SegmentPart {
     /// This is used for boundary context to ensure smooth line rendering
     /// at the edges of viewport-clipped segments.
     pub fn get_next_point<'a>(&self, route: &'a Route) -> Option<&'a gpx::Waypoint> {
+        // Profiling scope for next-point lookup to help trace boundary handling.
+        #[cfg(feature = "profiling")]
+        profiling::scope!("segment::get_next_point");
+
         let segment = route
             .gpx_data()
             .tracks
@@ -130,6 +140,10 @@ impl SegmentPart {
     /// Returns references to the waypoints at the simplified indices,
     /// providing the LOD-reduced representation of this segment part.
     pub fn get_simplified_points<'a>(&self, route: &'a Route) -> Vec<&'a gpx::Waypoint> {
+        // Make simplification point retrieval visible in traces; these calls are often hot.
+        #[cfg(feature = "profiling")]
+        profiling::scope!("segment::get_simplified_points");
+
         let segment = match route
             .gpx_data()
             .tracks
@@ -152,6 +166,10 @@ impl SegmentPart {
     /// and the next point (if any), enabling smooth line rendering at
     /// segment boundaries.
     pub fn get_points_with_context<'a>(&self, route: &'a Route) -> Vec<&'a gpx::Waypoint> {
+        // Profiling scope to attribute cost of assembling points with surrounding context.
+        #[cfg(feature = "profiling")]
+        profiling::scope!("segment::get_points_with_context");
+
         let mut points = Vec::new();
 
         if let Some(prev) = self.get_prev_point(route) {
@@ -171,6 +189,11 @@ impl SegmentPart {
     ///
     /// Returns all original waypoints without simplification.
     pub fn get_full_points<'a>(&self, route: &'a Route) -> Vec<&'a gpx::Waypoint> {
+        // Profiling scope for full-resolution point extraction; useful when diagnosing
+        // where rendering or geometry work originates in traces.
+        #[cfg(feature = "profiling")]
+        profiling::scope!("segment::get_full_points");
+
         let segment = match route
             .gpx_data()
             .tracks

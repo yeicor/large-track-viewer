@@ -57,13 +57,33 @@ impl WebHandle {
     #[allow(clippy::new_without_default)]
     #[wasm_bindgen]
     pub fn new() -> Self {
+        // XXX: Parse env early
+        super::cli::parse_env();
         // Initialize logging for wasm
         {
             use tracing_subscriber::layer::SubscriberExt;
             use tracing_subscriber::util::SubscriberInitExt;
+            use tracing_wasm::WASMLayerConfigBuilder;
 
+            let mut builder = WASMLayerConfigBuilder::new();
+            let max_level = if let Some(level_str) = super::cli::get_env::<String>("LOG_LEVEL") {
+                match level_str.to_uppercase().as_str() {
+                    "TRACE" => tracing::Level::TRACE,
+                    "DEBUG" => tracing::Level::DEBUG,
+                    "INFO" => tracing::Level::INFO,
+                    "WARN" => tracing::Level::WARN,
+                    "ERROR" => tracing::Level::ERROR,
+                    _ => tracing::Level::INFO,
+                }
+            } else if cfg!(debug_assertions) {
+                tracing::Level::DEBUG
+            } else {
+                tracing::Level::INFO
+            };
+            builder.set_max_level(max_level);
+            let config = builder.build();
             let _ = tracing_subscriber::registry()
-                .with(tracing_wasm::WASMLayer::default())
+                .with(tracing_wasm::WASMLayer::new(config))
                 .try_init();
         }
         std::panic::set_hook(Box::new(console_error_panic_hook::hook));

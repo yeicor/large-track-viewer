@@ -34,6 +34,7 @@ pub struct Config {
     pub max_points_per_node: usize,
 }
 
+#[cfg_attr(feature = "profiling", profiling::all_functions)]
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -91,9 +92,14 @@ pub struct RouteCollection {
     cached_stats: CachedStats,
 }
 
+#[cfg_attr(feature = "profiling", profiling::all_functions)]
 impl RouteCollection {
     /// Create a new route collection with the given configuration
     pub fn new(config: Config) -> Self {
+        // Profile high-level construction of the collection.
+        #[cfg(feature = "profiling")]
+        profiling::scope!("collection::new");
+
         let quadtree = Quadtree::new(config.reference_pixel_viewport, config.bias);
         Self {
             routes: Vec::new(),
@@ -108,6 +114,10 @@ impl RouteCollection {
     /// Parses the GPX data, builds a quadtree for the route, and merges it
     /// into the main spatial index.
     pub fn add_route(&mut self, gpx_data: gpx::Gpx) -> Result<()> {
+        // Profile single-route addition (parsing, quadtree build, merge)
+        #[cfg(feature = "profiling")]
+        profiling::scope!("collection::add_route");
+
         let route = Route::new(gpx_data)?;
         let route_index = self.routes.len();
 
@@ -136,6 +146,10 @@ impl RouteCollection {
     /// This is more efficient than adding routes one by one as it parallelizes
     /// both parsing and quadtree construction.
     pub fn add_routes_parallel(&mut self, gpx_data_vec: Vec<gpx::Gpx>) -> Result<()> {
+        // Profile parallel route ingestion (parsing + quadtree construction + merge)
+        #[cfg(feature = "profiling")]
+        profiling::scope!("collection::add_routes_parallel");
+
         let start_index = self.routes.len();
 
         // Parse and build quadtrees in parallel
@@ -170,6 +184,10 @@ impl RouteCollection {
 
     /// Load routes from GPX files in parallel
     pub fn load_from_files<P: AsRef<Path> + Send + Sync>(&mut self, paths: Vec<P>) -> Result<()> {
+        // Profile bulk file loading (IO + parsing + parallel route build)
+        #[cfg(feature = "profiling")]
+        profiling::scope!("collection::load_from_files");
+
         let gpx_data_vec: Result<Vec<gpx::Gpx>> = paths
             .into_par_iter()
             .map(|path| {
@@ -209,6 +227,10 @@ impl RouteCollection {
         geo_viewport: Rect<f64>,
         screen_size: (f64, f64),
     ) -> Vec<SimplifiedSegment> {
+        // Top-level collection query scope to attribute overhead outside the quadtree internals
+        #[cfg(feature = "profiling")]
+        profiling::scope!("collection::query_visible");
+
         self.quadtree.query(geo_viewport, screen_size)
     }
 

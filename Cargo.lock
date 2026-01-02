@@ -2748,6 +2748,7 @@ dependencies = [
  "dashmap",
  "geo",
  "gpx",
+ "profiling",
  "rayon",
  "serde",
  "smallvec",

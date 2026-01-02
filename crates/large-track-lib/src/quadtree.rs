@@ -94,6 +94,7 @@ struct QuadtreeNode {
     children: Option<Box<[QuadtreeNode; 4]>>,
 }
 
+#[cfg_attr(feature = "profiling", profiling::all_functions)]
 impl Quadtree {
     /// Create a new empty quadtree with Earth bounds
     ///
@@ -101,6 +102,15 @@ impl Quadtree {
     /// * `reference_pixel_viewport` - Reference viewport size for LOD calculations
     /// * `bias` - LOD bias factor (1.0 = normal, higher = more detail)
     pub fn new(reference_pixel_viewport: Rect<f64>, bias: f64) -> Self {
+        // High-level quadtree construction scope.
+        // Register a short-lived scope and thread name so initialization appears clearly
+        // in profiler traces when the `profiling` feature is enabled.
+        #[cfg(feature = "profiling")]
+        {
+            profiling::scope!("quadtree::new");
+            ::profiling::register_thread!("QuadtreeInit");
+        }
+
         Self {
             root: QuadtreeNode::new_root(reference_pixel_viewport, bias),
             reference_pixel_viewport,
@@ -119,6 +129,13 @@ impl Quadtree {
         pixel_viewport: Rect<f64>,
         bias: f64,
     ) -> Result<Self> {
+        // Profile per-route quadtree construction and mark the phase where segments are inserted.
+        #[cfg(feature = "profiling")]
+        {
+            profiling::scope!("quadtree::new_with_route");
+            profiling::scope!("quadtree::new_with_route:insert_segments");
+        }
+
         let mut quadtree = Self::new(pixel_viewport, bias);
 
         // Insert all track segments from the route
@@ -162,6 +179,7 @@ impl Quadtree {
     ///
     /// Both quadtrees must have the same configuration (viewport and bias).
     pub fn merge(&mut self, other: Quadtree) -> Result<()> {
+        profiling::scope!("quadtree::merge");
         // Verify compatibility
         if self.reference_pixel_viewport != other.reference_pixel_viewport {
             return Err(DataError::MergeMismatch {
@@ -196,6 +214,7 @@ impl Quadtree {
         geo_viewport: Rect<f64>,
         screen_size: (f64, f64),
     ) -> Vec<SimplifiedSegment> {
+        profiling::scope!("quadtree::query");
         let target_level = self.calculate_target_level(geo_viewport);
 
         // Calculate base tolerance using reference viewport
@@ -262,9 +281,12 @@ impl Quadtree {
         &self,
         raw: &RawSegment,
         tolerance: f64,
-        tolerance_level: u32,
+        level: u32,
         viewport: Rect<f64>,
     ) -> Option<SimplifiedSegment> {
+        // Scope to observe per-segment simplification + clipping costs in traces.
+        #[cfg(feature = "profiling")]
+        profiling::scope!("quadtree::get_or_create_simplified_clipped");
         // For chunked segments, we need a unique cache key that includes the chunk identity
         let chunk_hash = raw.original_indices.as_ref().map(|indices| {
             // Use first and last original index as part of key
@@ -273,11 +295,14 @@ impl Quadtree {
             (first, last, indices.len())
         });
 
+        // The original implementation used a `tolerance_level` variable here.
+        // We now derive the tolerance level from the provided `level` parameter
+        // (which represents the quadtree level / discretized tolerance).
         let cache_key = SimplificationCacheKey {
             route_ptr: Arc::as_ptr(&raw.route) as usize,
             track_index: raw.track_index,
             segment_index: raw.segment_index,
-            tolerance_level,
+            tolerance_level: level,
             chunk_hash,
         };
 
@@ -362,6 +387,7 @@ impl Quadtree {
     }
 }
 
+#[cfg_attr(feature = "profiling", profiling::all_functions)]
 impl QuadtreeNode {
     /// Create a root node covering the entire Earth in Web Mercator
     fn new_root(_reference_pixel_viewport: Rect<f64>, _bias: f64) -> Self {
@@ -412,6 +438,10 @@ impl QuadtreeNode {
 
     /// Subdivide this node into 4 children
     fn subdivide(&mut self, pixel_viewport: Rect<f64>, bias: f64) {
+        // Make subdivision visible in profiling traces.
+        #[cfg(feature = "profiling")]
+        profiling::scope!("quadtree::node::subdivide");
+
         if self.children.is_some() {
             return; // Already subdivided
         }
@@ -460,6 +490,10 @@ impl QuadtreeNode {
     /// Segments are chunked at node boundaries so each node only stores
     /// the portion of the segment that falls within its bounds.
     fn insert_segment(&mut self, segment: RawSegment, pixel_viewport: Rect<f64>, bias: f64) {
+        // Attribute insertion work to a profiling scope so heavy insertions are visible.
+        #[cfg(feature = "profiling")]
+        profiling::scope!("quadtree::node::insert_segment");
+
         // Check if segment intersects this node's bounding box
         if !self.segment_intersects_bounds(&segment.mercator_points) {
             return;
@@ -496,6 +530,10 @@ impl QuadtreeNode {
     /// Returns a new RawSegment containing only the points (and connecting points)
     /// that are relevant to this node's bounds. Returns None if no points intersect.
     fn extract_segment_chunk(&self, segment: &RawSegment) -> Option<RawSegment> {
+        // Make chunk extraction visible in traces to help attribute cost of chunking vs. traversal.
+        #[cfg(feature = "profiling")]
+        profiling::scope!("quadtree::node::extract_segment_chunk");
+
         let points = &segment.mercator_points;
         if points.is_empty() {
             return None;
@@ -835,6 +873,11 @@ fn segment_bbox_intersects_viewport(bbox: &Rect<f64>, viewport: Rect<f64>) -> bo
 /// avoiding the O(n²) mapping step.
 #[inline]
 fn simplify_vw_indices_fast(points: &[Point<f64>], tolerance: f64) -> Vec<usize> {
+    // Scope the Douglas-Peucker / Visvalingam-Wyatt style simplification so its cost
+    // is visible in profiling traces (this function is often hot).
+    #[cfg(feature = "profiling")]
+    profiling::scope!("quadtree::simplify_vw_indices_fast");
+
     if points.len() <= 2 {
         return (0..points.len()).collect();
     }

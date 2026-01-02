@@ -20,7 +20,19 @@ where
     F: std::future::Future + Send + 'static,
     F::Output: Send + 'static,
 {
-    tokio::spawn(future)
+    // Wrap the provided future in a profiling scope so spawned tasks are easier
+    // to identify in profiling traces. When profiling is disabled this is a no-op.
+    #[cfg(feature = "profiling")]
+    {
+        tokio::spawn(async move {
+            profiling::scope!("async_runtime::spawn");
+            future.await
+        })
+    }
+    #[cfg(not(feature = "profiling"))]
+    {
+        tokio::spawn(future)
+    }
 }
 
 /// Spawn an async task.
@@ -33,7 +45,19 @@ where
     F: std::future::Future + Send + 'static,
     F::Output: Send + 'static,
 {
-    tokio_with_wasm::spawn(future)
+    // On wasm the same wrapper pattern applies: create a profiling scope inside
+    // the spawned task so it appears in traces when profiling is enabled.
+    #[cfg(feature = "profiling")]
+    {
+        tokio_with_wasm::spawn(async move {
+            profiling::scope!("async_runtime::spawn");
+            future.await
+        })
+    }
+    #[cfg(not(feature = "profiling"))]
+    {
+        tokio_with_wasm::spawn(future)
+    }
 }
 
 /// Yield execution to allow other tasks to run.
@@ -122,6 +146,11 @@ pub fn blocking_read<T, R, F>(lock: &RwLock<T>, f: F) -> R
 where
     F: FnOnce(&T) -> R,
 {
+    // Top-level profiling scope for the blocking read helper.
+    // This helps separate time spent waiting for locks in traces.
+    #[cfg(feature = "profiling")]
+    profiling::scope!("async_runtime::blocking_read");
+
     loop {
         if let Ok(guard) = lock.try_read() {
             return f(&*guard);
@@ -136,6 +165,10 @@ pub fn blocking_write<T, R, F>(lock: &RwLock<T>, f: F) -> R
 where
     F: FnOnce(&mut T) -> R,
 {
+    // Profiling scope for the blocking write helper so lock contention is visible.
+    #[cfg(feature = "profiling")]
+    profiling::scope!("async_runtime::blocking_write");
+
     loop {
         if let Ok(mut guard) = lock.try_write() {
             return f(&mut *guard);

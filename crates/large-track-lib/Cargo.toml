@@ -10,6 +10,7 @@ edition.workspace = true
 [features]
 default = []
 serde = ["dep:serde", "gpx/use-serde", "geo/use-serde"]
+profiling = []
 
 [dependencies]
 # === GPX and Geo ===
@@ -29,6 +30,7 @@ thiserror = "2.0"
 
 # === Logging ===
 tracing.workspace = true
+profiling.workspace = true
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

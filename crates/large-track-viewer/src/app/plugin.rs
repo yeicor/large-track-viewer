@@ -90,6 +90,8 @@ impl TrackPlugin {
         projector: &Projector,
         painter: &egui::Painter,
     ) -> usize {
+        #[cfg(feature = "profiling")]
+        profiling::scope!("plugin::render_segment");
         // Use route_index as a stable, cheap color seed (avoids hashing metadata string)
         let color = Self::get_route_color(segment.route_index);
 
@@ -140,6 +142,8 @@ impl TrackPlugin {
         projector: &Projector,
         painter: &egui::Painter,
     ) {
+        #[cfg(feature = "profiling")]
+        profiling::scope!("plugin::render_segment_highlight");
         let highlight_color = Color32::from_rgb(255, 200, 0);
         let highlight_stroke = Stroke::new(self.width + 3.0, highlight_color);
         let outline_stroke = Stroke::new(self.width + 5.0, Color32::from_black_alpha(200));

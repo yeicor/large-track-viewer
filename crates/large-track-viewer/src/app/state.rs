@@ -170,6 +170,7 @@ pub struct Stats {
 
 impl AppState {
     /// Create new application state from CLI settings
+    #[cfg_attr(feature = "profiling", profiling::function)]
     pub fn new(settings: &Settings) -> Self {
         let config = Config {
             bias: settings.bias,
@@ -230,6 +231,7 @@ impl AppState {
     }
 
     // Load a single file
+    #[cfg_attr(feature = "profiling", profiling::function)]
     async fn load_file_to_gpx(file: &DroppedFile) -> Result<gpx::Gpx, String> {
         let buf = {
             #[cfg(not(target_arch = "wasm32"))]
@@ -259,7 +261,13 @@ impl AppState {
     }
 
     /// Start parallel loading of all pending files
+    #[cfg_attr(feature = "profiling", profiling::function)]
     pub fn start_parallel_load(&mut self) {
+        // High-level scope for the parallel load entry so time spent scheduling
+        // and queuing is visible in profiling traces.
+        #[cfg(feature = "profiling")]
+        profiling::scope!("file_loader::start_parallel_load");
+
         let files_to_load: Vec<DroppedFile> = self.file_loader.pending_files.drain(..).collect();
         if files_to_load.is_empty() {
             return;
@@ -290,8 +298,26 @@ impl AppState {
             let semaphore = semaphore.clone();
             // Use async_runtime::spawn which works on both native (tokio) and web (tokio-with-wasm)
             async_runtime::spawn(async move {
+                // Per-worker profiling scope to attribute time per file load
+                #[cfg(feature = "profiling")]
+                profiling::scope!("file_loader::worker");
+
+                // Register worker logical/thread name for profilers that display thread names.
+                // This is guarded so it only runs when profiling feature is enabled.
+                #[cfg(feature = "profiling")]
+                {
+                    // Some profiling backends expose a macro to name the current thread.
+                    // Use the absolute crate path to reference the dependency's macro.
+                    ::profiling::register_thread!("FileLoaderWorker");
+                }
+
                 let permit = semaphore.acquire_owned().await.unwrap();
+
+                // Profile the actual IO + parse operation inside the worker scope
+                #[cfg(feature = "profiling")]
+                profiling::scope!("file_loader::io_and_parse");
                 let result = Self::load_file_to_gpx(&dropped_file).await;
+
                 {
                     // Compute a stable identifier for this file (real path when available,
                     // synthetic web://<name> otherwise).
@@ -302,6 +328,7 @@ impl AppState {
                     guard.push((path, result));
                 }
                 drop(permit); // release semaphore
+
                 // Yield to allow other tasks to run (helps UI responsiveness)
                 async_runtime::yield_now().await;
             });
@@ -311,6 +338,7 @@ impl AppState {
     /// Process results from parallel loading incrementally.
     /// Processes one result per call to keep UI responsive during indexing.
     /// Returns true if there are more results to process.
+    #[cfg_attr(feature = "profiling", profiling::function)]
     pub fn process_parallel_results(&mut self) -> bool {
         // Check if we're done (all added)
         let total = self.file_loader.parallel_total_files.load(Ordering::SeqCst);

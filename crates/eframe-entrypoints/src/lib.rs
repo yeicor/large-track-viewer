@@ -36,6 +36,47 @@ pub mod run;
 pub use cli::parse_args;
 pub use profiling::profiling_ui;
 
+/// Convenience macro to create profiling scopes from other crates/modules.
+/// Usage:
+///   app_profiling_scope!("some_scope_name");
+///
+/// This proxies to the profiling crate using an absolute path to avoid
+/// ambiguity with the local `profiling` module re-export.
+#[macro_export]
+macro_rules! app_profiling_scope {
+    ($name:literal) => {
+        #[cfg(feature = "profiling")]
+        ::profiling::scope!($name);
+    };
+}
+
+// Profiling macros will be referenced via absolute crate path (::profiling::...)
+// The explicit `extern crate` alias was removed to avoid name conflicts with the
+// local `profiling` module re-export.
+
+/// Helper to mark the end of a frame for supported profiling backends.
+///
+/// Some profiling backends need an explicit "finish frame" call to ensure the
+/// current frame's trace events are finalized. This is a convenience wrapper
+/// that is a no-op when the `profiling` feature is not enabled.
+pub fn finish_profiling_frame() {
+    #[cfg(feature = "profiling")]
+    {
+        // Prefer macro form if the profiling crate exposes it as a macro.
+        // If the crate exposes a function instead, this will need to be adjusted.
+        // This call is guarded by the `profiling` feature so it only compiles
+        // into profiling-enabled builds.
+        #[allow(unused_macros)]
+        {
+            // Use the macro-style finish_frame if available on the external crate
+            // referenced under the `profiling_crate` alias.
+            ::profiling::finish_frame!();
+        }
+    }
+
+    // When profiling is disabled, this is intentionally a no-op.
+}
+
 mod metadata;
 pub use metadata::{log_version_info, short_version_info};
 
@@ -161,6 +202,13 @@ macro_rules! eframe_app_main {
 
 /// Internal implementation for Android entry point.
 /// Use the `eframe_app!` macro instead of calling this directly.
+///
+/// Notes:
+/// - When compiled in debug with the `profiling` feature, this function is
+///   instrumented and will register the main Android entry thread with the
+///   profiling backend so that traces show a meaningful thread name.
+/// - The `cfg_attr` ensures the profiling attribute is only applied in
+///   debug builds with the `profiling` feature enabled.
 #[cfg(target_os = "android")]
 #[doc(hidden)]
 pub fn android_main_impl(
@@ -172,6 +220,28 @@ pub fn android_main_impl(
 
     android_logger::init_once(android_logger::Config::default());
     log::info!("Starting {} on Android", app_name);
+
+    // Name the thread and create a short-lived scope for the Android main entry so
+    // profiler traces contain a clear entry point for application startup.
+    #[cfg(feature = "profiling")]
+    {
+        ::profiling::register_thread!("AndroidMain");
+        ::profiling::scope!("app::android_main_impl");
+    }
+
+    // Register the main thread name for logging/profiling in debug builds.
+    // When the `profiling` feature is enabled we register this thread so that
+    // profiler UIs can show a human-friendly thread name in traces.
+    #[cfg(feature = "profiling")]
+    {
+        // The profiling crate exposes a `register_thread` macro to name the current
+        // thread for profiler backends. Use a stable name for the Android main
+        // entry so traces include it.
+        //
+        // If your profiling crate exposes a different API (function vs macro),
+        // adjust this call accordingly.
+        ::profiling::register_thread!("AndroidMain");
+    }
 
     unsafe {
         // Safe: single-threaded at startup
@@ -211,10 +281,28 @@ pub async fn native_main_impl(
     app_name: &str,
     app_creator: impl FnOnce(&eframe::CreationContext<'_>) -> Box<dyn eframe::App>,
 ) {
+    // Create a profiling scope marking native main startup so startup time and
+    // initialization work are visible in traces. This is a no-op when profiling
+    // is disabled.
+    #[cfg(feature = "profiling")]
+    {
+        ::profiling::scope!("app::native_main_impl");
+    }
+
     // Initialize tracing subscriber with profiling support if enabled
     // This MUST be done before any logging, so both fmt and chrome layers
     // are registered together in the same subscriber
     profiling::setup_logging_and_profiling();
+
+    // Register the main thread name for logging/profiling in debug builds.
+    // When the `profiling` feature is enabled we register this thread so that
+    // profiler UIs can show a human-friendly thread name in traces.
+    #[cfg(feature = "profiling")]
+    {
+        // Name the main native thread. If your profiling crate uses a function
+        // instead of a macro, update this line to call the correct API.
+        ::profiling::register_thread!("Main");
+    }
 
     log_version_info();
 

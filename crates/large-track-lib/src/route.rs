@@ -21,6 +21,7 @@ pub struct Route {
     cached_total_distance: f64,
 }
 
+#[cfg_attr(feature = "profiling", profiling::all_functions)]
 impl Route {
     /// Create a new Route from GPX data
     ///
@@ -30,6 +31,10 @@ impl Route {
     /// # Returns
     /// An `Arc<Route>` on success, or an error if the route is empty or invalid
     pub fn new(gpx_data: gpx::Gpx) -> Result<Arc<Self>> {
+        // High-level profiling scope for route construction.
+        // This helps attribute time spent parsing and building route metadata.
+        #[cfg(feature = "profiling")]
+        profiling::scope!("route::new");
         // Compute all metadata in a single pass
         let (bounding_box_mercator, total_points, total_distance) =
             Self::compute_metadata(&gpx_data)?;
@@ -50,6 +55,10 @@ impl Route {
     ///
     /// Returns (bounding_box, total_points, total_distance)
     fn compute_metadata(gpx: &gpx::Gpx) -> Result<(Rect<f64>, usize, f64)> {
+        // Profiling scope for metadata computation (bounding box, counts, distance).
+        // This is useful to separate parsing time from metadata computation in traces.
+        #[cfg(feature = "profiling")]
+        profiling::scope!("route::compute_metadata");
         let mut min_x = f64::INFINITY;
         let mut min_y = f64::INFINITY;
         let mut max_x = f64::NEG_INFINITY;
