@@ -3,6 +3,11 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -173,10 +178,16 @@ jobs:
           token: ${{ secrets.CONTENTS_GITHUB_TOKEN }}
           files: large-track-viewer-web.tar.gz
 
+      # Publish GitHub Pages when a tag is pushed (release)
       - if: startsWith(github.ref, 'refs/tags/')
-        uses: actions/deploy-pages@v4
+        name: Upload artifact for GitHub Pages
+        uses: actions/upload-pages-artifact@v1
         with:
-          artifact: crates/large-track-viewer/dist
+          path: crates/large-track-viewer/dist
+
+      - if: startsWith(github.ref, 'refs/tags/')
+        name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@v4
 
   build-android:
     needs: [sync-version]
