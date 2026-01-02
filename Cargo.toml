@@ -17,6 +17,7 @@ repository = "https://github.com/Yeicor/large-track-viewer"
 eframe = { version = "0.33", features = ["persistence"] }
 egui = "*" # Use the same version as eframe
 winit = "*" # Use the same version as eframe
+rfd = "0.16" # Selecting files on native platforms
 
 # === Async Runtime ===
 tokio = { version = "1.48", default-features = false, features = ["macros", "sync", "io-util"] }
