@@ -432,25 +432,10 @@ mod inner {
         }
 
         if enabled {
-            ui.label("⏺ Recording session active");
-            ui.add_space(4.0);
-            ui.label("Chrome layer is capturing all tracing spans.");
-            ui.label("Disable to view the trace in Perfetto UI.");
+            ui.label("⏺ Recording active");
+            ui.label("Capturing tracing spans. Stop to view in Perfetto.");
         } else {
-            ui.label("Click checkbox to mark profiling session start.");
-            ui.add_space(4.0);
-            ui.label("⚠️ Note: Chrome layer is enabled on-demand!");
-            ui.label("Checkbox controls the layer via reload.");
-            ui.add_space(4.0);
-            ui.label("When you disable:");
-            ui.label("  • Chrome layer is disabled (dropped)");
-            ui.label("  • Trace file is flushed");
-            ui.label("  • Most recent trace file will be found");
-            ui.label("  • HTTP server starts on port 9001");
-            ui.label("  • Perfetto UI opens automatically");
-            ui.label("  • Trace loads automatically!");
-            ui.label("  • Server keeps running until next session");
-            ui.label("  • File deleted when starting new profiling");
+            ui.label("Enable to start profiling.");
         }
     }
 }
@@ -492,9 +477,7 @@ mod inner {
     }
 
     pub fn profiling_ui(ui: &mut egui::Ui) {
-        ui.label("Profiling is disabled in this build (release or profiling feature not enabled).");
-        ui.add_space(4.0);
-        ui.label("Enable for debug runs: cargo run --features profiling");
+        ui.label("Profiling feature not enabled in this build.");
     }
 }
 
