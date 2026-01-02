@@ -114,64 +114,35 @@ pub use eframe::CreationContext;
 #[macro_export]
 macro_rules! eframe_app_lib {
     ($app_name:expr, $app_creator:expr) => {
-        // ==========================================
-        // Web (WASM) entry point
-        // ==========================================
-        /// Sets up the app creator for web builds.
-        /// On web, we use tokio-with-wasm which runs async tasks on the JS event loop,
-        /// so no tokio runtime is needed.
-        #[cfg(target_arch = "wasm32")]
-        #[wasm_bindgen::prelude::wasm_bindgen]
-        pub fn do_set_app_creator() {
-            $crate::web::set_app_creator($app_creator);
-        }
-
-        // ==========================================
-        // Android entry point
-        // ==========================================
         #[cfg(target_os = "android")]
         #[unsafe(no_mangle)] // SAFETY: there is no other global function of this name
         pub fn android_main(app: ::winit::platform::android::activity::AndroidApp) {
             $crate::android_main_impl($app_name, app, $app_creator);
-        }
-
-        // ==========================================
-        // Native entry point (called from main.rs)
-        // ==========================================
-        /// Run the application on native (desktop) platforms.
-        ///
-        /// Call this from your `main.rs`:
-        /// ```ignore
-        /// fn main() {
-        ///     my_app::run_native();
-        /// }
-        /// ```
-        #[cfg(not(target_arch = "wasm32"))]
-        pub fn run_native() {
-            let rt = ::tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-                .expect("Failed to create Tokio runtime");
-
-            rt.block_on(async {
-                $crate::native_main_impl($app_name, $app_creator).await;
-            });
         }
     };
 }
 
 #[macro_export]
 macro_rules! eframe_app_main {
-    () => {
+    ($app_name:expr, $app_creator:expr) => {
         fn main() {
             #[cfg(not(target_arch = "wasm32"))]
-            large_track_viewer::run_native();
+            {
+                let rt = ::tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .build()
+                    .expect("Failed to create Tokio runtime");
+
+                rt.block_on(async {
+                    $crate::native_main_impl($app_name, $app_creator).await;
+                });
+            };
         }
 
         #[cfg(target_arch = "wasm32")]
         #[wasm_bindgen::prelude::wasm_bindgen(start)]
         fn main_web() {
-            large_track_viewer::do_set_app_creator();
+            $crate::web::set_app_creator($app_creator);
         }
     };
 }

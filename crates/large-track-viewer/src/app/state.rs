@@ -523,9 +523,57 @@ impl AppState {
     }
 
     /// Process pending file loads (one at a time, for incremental loading)
+    ///
+    /// On wasm we avoid doing heavy synchronous work on the main thread. If
+    /// there are pending files and no parallel load in progress, spawn a single
+    /// async task to handle exactly one file and push its result into the
+    /// `parallel_load_results` queue. This keeps parsing cooperative with the
+    /// JS event loop and prevents freezing during initial load.
     pub fn process_pending_files(&mut self) {
-        // First check for parallel results
+        // First process any ready parallel results
         self.process_parallel_results();
+
+        // If a parallel load is already in progress, let that continue.
+        if self.is_parallel_loading() {
+            return;
+        }
+
+        // WASM-specific incremental processing: spawn exactly one async loader
+        // for a single pending file so we don't block the main thread by parsing
+        // many files synchronously in a single frame.
+        #[cfg(target_arch = "wasm32")]
+        {
+            // Pop a single pending file (if any)
+            if let Some(dropped_file) = self.file_loader.pending_files.pop() {
+                // Indicate we have one outstanding async file to process.
+                self.file_loader
+                    .parallel_total_files
+                    .store(1, std::sync::atomic::Ordering::SeqCst);
+
+                let results = self.file_loader.parallel_load_results.clone();
+
+                // Spawn a single cooperative task that performs the IO+parse off the
+                // immediate synchronous path and pushes the result to the shared queue.
+                async_runtime::spawn(async move {
+                    let res = Self::load_file_to_gpx(&dropped_file).await;
+                    let path = synthetic_path_for(&dropped_file);
+                    let mut guard = results
+                        .lock()
+                        .expect("failed to acquire lock on parallel_load_results mutex to push worker result");
+                    guard.push((path, res));
+                    // Yield to the event loop to keep things responsive
+                    async_runtime::yield_now().await;
+                });
+            }
+            return;
+        }
+
+        // Non-wasm platforms rely on start_parallel_load / worker threads and
+        // process_parallel_results to handle incremental processing.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            // No-op here; native parallel loading handles pending files.
+        }
     }
 
     /// Add a file to the pending load queue
