@@ -538,7 +538,7 @@ impl AppState {
 
         // If a parallel load is already in progress, let that continue.
         if self.is_parallel_loading() {
-            return;
+            // parallel loading in progress; nothing to do here
         }
     }
 

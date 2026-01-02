@@ -514,18 +514,18 @@ fn render_settings_tab(ui: &mut Ui, state: &mut AppState) {
 ///    behavior through the reusable module.
 pub fn show_file_picker(state: &mut AppState) {
     // 1) Drain any previously-read files (web or native) into the loader.
-    if let Ok(files) = eframe_entrypoints::file_picker::drain_file_queue() {
-        if !files.is_empty() {
-            for (name, bytes) in files {
-                state.queue_file(egui::DroppedFile {
-                    name,
-                    path: None,
-                    bytes: Some(bytes.into()),
-                    ..Default::default()
-                });
-            }
-            state.start_parallel_load();
+    if let Ok(files) = eframe_entrypoints::file_picker::drain_file_queue()
+        && !files.is_empty()
+    {
+        for (name, bytes) in files {
+            state.queue_file(egui::DroppedFile {
+                name,
+                path: None,
+                bytes: Some(bytes.into()),
+                ..Default::default()
+            });
         }
+        state.start_parallel_load();
     }
 
     // 2) If the UI requested the picker, open it now (cross-platform).

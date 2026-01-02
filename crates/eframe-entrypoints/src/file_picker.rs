@@ -16,7 +16,9 @@ use once_cell::sync::Lazy;
 use std::sync::Mutex;
 
 /// Shared queue of picked files. Each entry is (name, bytes).
-static QUEUE: Lazy<Mutex<Vec<(String, Vec<u8>)>>> = Lazy::new(|| Mutex::new(Vec::new()));
+type QueueEntry = (String, Vec<u8>);
+type Queue = Vec<QueueEntry>;
+static QUEUE: Lazy<Mutex<Queue>> = Lazy::new(|| Mutex::new(Vec::new()));
 
 #[cfg(target_arch = "wasm32")]
 mod imp {
@@ -117,9 +119,8 @@ mod imp {
         let mut dialog = rfd::FileDialog::new();
         if let Some(acc) = accept {
             // naive: if acc starts with '.', treat as extension
-            if acc.starts_with('.') {
-                let ext = &acc[1..];
-                dialog = dialog.add_filter(&format!("{} files", ext), &[ext]);
+            if let Some(ext) = acc.strip_prefix('.') {
+                dialog = dialog.add_filter(format!("{} files", ext), &[ext]);
             } else {
                 // otherwise ignore (rfd supports glob patterns in filters but we'll keep simple)
             }
@@ -151,16 +152,6 @@ mod imp {
         }
         Ok(())
     }
-
-    /// Drain the shared queue and return all picked files.
-    pub fn drain_file_queue() -> Result<Vec<(String, Vec<u8>)>, String> {
-        if let Ok(mut guard) = QUEUE.lock() {
-            let out = guard.drain(..).collect();
-            Ok(out)
-        } else {
-            Err("failed to lock queue".to_string())
-        }
-    }
 }
 
 #[cfg(target_os = "android")]
@@ -173,6 +164,7 @@ mod imp {
 pub use imp::open_file_picker;
 
 /// Drain the shared Rust-side queue and return all picked files.
+#[allow(dead_code)]
 pub fn drain_file_queue() -> Result<Vec<(String, Vec<u8>)>, String> {
     if let Ok(mut guard) = QUEUE.lock() {
         let out = guard.drain(..).collect();
