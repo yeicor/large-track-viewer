@@ -25,7 +25,12 @@ where
     #[cfg(feature = "profiling")]
     {
         tokio::spawn(async move {
-            profiling::scope!("async_runtime::spawn");
+            // Attach a tag describing the spawned future type so profiler traces
+            // can be filtered by task kind without emitting separate events.
+            profiling::scope!(
+                "async_runtime::spawn",
+                format!("task_type={}", std::any::type_name::<F>()).as_str()
+            );
             future.await
         })
     }
@@ -147,9 +152,9 @@ where
     F: FnOnce(&T) -> R,
 {
     // Top-level profiling scope for the blocking read helper.
-    // This helps separate time spent waiting for locks in traces.
+    // Attach a static tag so lock-wait hotspots can be filtered by helper name.
     #[cfg(feature = "profiling")]
-    profiling::scope!("async_runtime::blocking_read");
+    profiling::scope!("async_runtime::blocking_read", "helper=blocking_read");
 
     loop {
         if let Ok(guard) = lock.try_read() {

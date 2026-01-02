@@ -82,10 +82,10 @@ mod inner {
                 if cfg!(debug_assertions) {
                     std::env::set_var(
                         "RUST_LOG",
-                        "debug,eframe::native=warn,hyper_util=info,walkers=info",
+                        "debug,eframe::native=warn,hyper_util=info,walkers=info,egui::context=warn,reqwest::connect=info",
                     );
                 } else {
-                    std::env::set_var("RUST_LOG", "info,eframe::native=warn");
+                    std::env::set_var("RUST_LOG", "info,eframe::native=warn,egui::context=warn");
                 }
             }
             tracing::info!(

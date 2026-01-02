@@ -90,10 +90,15 @@ impl TrackPlugin {
         projector: &Projector,
         painter: &egui::Painter,
     ) -> usize {
-        #[cfg(feature = "profiling")]
-        profiling::scope!("plugin::render_segment");
         // Use route_index as a stable, cheap color seed (avoids hashing metadata string)
         let color = Self::get_route_color(segment.route_index);
+
+        // Tag render work with route index so heavy draws can be attributed to routes.
+        #[cfg(feature = "profiling")]
+        profiling::scope!(
+            "plugin::render_segment",
+            format!("route={}", segment.route_index).as_str()
+        );
 
         // Inner stroke with the route color
         let inner_stroke = Stroke::new(self.width, color);
@@ -182,12 +187,21 @@ impl Plugin for TrackPlugin {
         projector: &Projector,
         _map_memory: &walkers::MapMemory,
     ) {
-        profiling::scope!("TrackPlugin::run");
-
         let painter = ui.painter();
 
         // Get the viewport bounds in screen space
         let viewport_rect = response.rect;
+
+        // Tag the plugin run with screen size so traces can be filtered by UI viewport.
+        #[cfg(feature = "profiling")]
+        {
+            let tag = format!(
+                "screen={}x{}",
+                viewport_rect.width() as u32,
+                viewport_rect.height() as u32
+            );
+            profiling::scope!("TrackPlugin::run", tag.as_str());
+        }
 
         // Convert screen corners to geographic positions and then to Web Mercator
         let top_left_pos =
@@ -222,7 +236,21 @@ impl Plugin for TrackPlugin {
             // Pass screen size for dynamic LOD adjustment
             let screen_size = (viewport_rect.width() as f64, viewport_rect.height() as f64);
             let segments: Vec<SimplifiedSegment> = {
-                profiling::scope!("query_visible");
+                // Attach a tag with screen and viewport size to the query span for better filtering.
+                #[cfg(feature = "profiling")]
+                {
+                    let tag = format!(
+                        "screen={}x{},vp={:.1}x{:.1}",
+                        screen_size.0 as u32,
+                        screen_size.1 as u32,
+                        viewport.width(),
+                        viewport.height()
+                    );
+                    profiling::scope!("query_visible", tag.as_str());
+                }
+                #[cfg(not(feature = "profiling"))]
+                {}
+
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     // Block briefly on native to ensure we get a consistent result
@@ -359,7 +387,11 @@ impl Plugin for TrackPlugin {
             // We render non-selected routes first, then selected route(s) on top.
             let mut total_points = 0usize;
             {
-                profiling::scope!("render_segments");
+                #[cfg(feature = "profiling")]
+                profiling::scope!(
+                    "render_segments",
+                    format!("segments={}", segments.len()).as_str()
+                );
 
                 let selected = {
                     #[cfg(not(target_arch = "wasm32"))]

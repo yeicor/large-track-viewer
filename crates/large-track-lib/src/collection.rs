@@ -147,8 +147,12 @@ impl RouteCollection {
     /// both parsing and quadtree construction.
     pub fn add_routes_parallel(&mut self, gpx_data_vec: Vec<gpx::Gpx>) -> Result<()> {
         // Profile parallel route ingestion (parsing + quadtree construction + merge)
+        // Capture the number of routes being added as a small tag for trace filtering.
         #[cfg(feature = "profiling")]
-        profiling::scope!("collection::add_routes_parallel");
+        profiling::scope!(
+            "collection::add_routes_parallel",
+            format!("routes={}", gpx_data_vec.len()).as_str()
+        );
 
         let start_index = self.routes.len();
 
@@ -185,8 +189,12 @@ impl RouteCollection {
     /// Load routes from GPX files in parallel
     pub fn load_from_files<P: AsRef<Path> + Send + Sync>(&mut self, paths: Vec<P>) -> Result<()> {
         // Profile bulk file loading (IO + parsing + parallel route build)
+        // Record total path count as a tag so traces can be filtered by batch size.
         #[cfg(feature = "profiling")]
-        profiling::scope!("collection::load_from_files");
+        profiling::scope!(
+            "collection::load_from_files",
+            format!("paths={}", paths.len()).as_str()
+        );
 
         let gpx_data_vec: Result<Vec<gpx::Gpx>> = paths
             .into_par_iter()

@@ -52,30 +52,6 @@ macro_rules! app_profiling_scope {
 
 // Profiling macros will be referenced via absolute crate path (::profiling::...)
 // The explicit `extern crate` alias was removed to avoid name conflicts with the
-// local `profiling` module re-export.
-
-/// Helper to mark the end of a frame for supported profiling backends.
-///
-/// Some profiling backends need an explicit "finish frame" call to ensure the
-/// current frame's trace events are finalized. This is a convenience wrapper
-/// that is a no-op when the `profiling` feature is not enabled.
-pub fn finish_profiling_frame() {
-    #[cfg(feature = "profiling")]
-    {
-        // Prefer macro form if the profiling crate exposes it as a macro.
-        // If the crate exposes a function instead, this will need to be adjusted.
-        // This call is guarded by the `profiling` feature so it only compiles
-        // into profiling-enabled builds.
-        #[allow(unused_macros)]
-        {
-            // Use the macro-style finish_frame if available on the external crate
-            // referenced under the `profiling_crate` alias.
-            ::profiling::finish_frame!();
-        }
-    }
-
-    // When profiling is disabled, this is intentionally a no-op.
-}
 
 mod metadata;
 pub use metadata::{log_version_info, short_version_info};

@@ -298,26 +298,35 @@ impl AppState {
             let semaphore = semaphore.clone();
             // Use async_runtime::spawn which works on both native (tokio) and web (tokio-with-wasm)
             async_runtime::spawn(async move {
-                // Per-worker profiling scope to attribute time per file load
-                #[cfg(feature = "profiling")]
-                profiling::scope!("file_loader::worker");
-
-                // Register worker logical/thread name for profilers that display thread names.
-                // This is guarded so it only runs when profiling feature is enabled.
+                // Per-worker profiling scope with tag for file identifier (path or synthetic id).
+                // This attaches a small data field to the span which is useful for filtering
+                // traces without emitting additional events.
                 #[cfg(feature = "profiling")]
                 {
-                    // Some profiling backends expose a macro to name the current thread.
-                    // Use the absolute crate path to reference the dependency's macro.
+                    // Build a string identifier for the file being processed
+                    let file_id = synthetic_path_for(&dropped_file)
+                        .to_string_lossy()
+                        .to_string();
+                    let tag = format!("file={}", file_id);
+                    // Top-level worker span tagged with the file id for easy lookup in traces
+                    profiling::scope!("file_loader::worker", tag.as_str());
+                    // Name the worker thread so profilers can show the worker as a meaningful thread
                     ::profiling::register_thread!("FileLoaderWorker");
                 }
 
                 let permit = semaphore.acquire_owned().await.unwrap();
 
                 // Profile the actual IO + parse operation inside the worker scope
+                // Reuse the same tag string to correlate IO work with the worker span.
                 #[cfg(feature = "profiling")]
-                profiling::scope!("file_loader::io_and_parse");
+                {
+                    let file_id = synthetic_path_for(&dropped_file)
+                        .to_string_lossy()
+                        .to_string();
+                    let tag = format!("file={}", file_id);
+                    profiling::scope!("file_loader::io_and_parse", tag.as_str());
+                }
                 let result = Self::load_file_to_gpx(&dropped_file).await;
-
                 {
                     // Compute a stable identifier for this file (real path when available,
                     // synthetic web://<name> otherwise).
@@ -328,7 +337,6 @@ impl AppState {
                     guard.push((path, result));
                 }
                 drop(permit); // release semaphore
-
                 // Yield to allow other tasks to run (helps UI responsiveness)
                 async_runtime::yield_now().await;
             });
@@ -344,6 +352,15 @@ impl AppState {
         let total = self.file_loader.parallel_total_files.load(Ordering::SeqCst);
 
         let added = self.file_loader.loaded_files.len() + self.file_loader.errors.len();
+
+        // Attach a short data tag with processed/total counts so this helper is
+        // easily filterable in traces without emitting events.
+        #[cfg(feature = "profiling")]
+        {
+            let tag = format!("processed={}/{}", added, total);
+            profiling::scope!("app_state::process_parallel_results", tag.as_str());
+        }
+
         if total > 0 && added >= total {
             self.reset_parallel_loading();
             return false;
@@ -379,6 +396,21 @@ impl AppState {
                             "Could not acquire write lock on route_collection".to_string(),
                         ));
                         async_runtime::blocking_write(&self.route_collection, |collection| {
+                            // Tag the add_route operation with the source file so traces can link
+                            // route addition time to the originating file.
+                            #[cfg(feature = "profiling")]
+                            {
+                                // `path` is available from the outer scope; include only file name for brevity.
+                                let file_name =
+                                    path.file_name().unwrap_or_default().to_string_lossy();
+                                let tag = format!(
+                                    "file={},start_idx={}",
+                                    file_name,
+                                    collection.route_count()
+                                );
+                                profiling::scope!("collection::add_route", tag.as_str());
+                            }
+
                             // The route will be appended; record the index where it will be inserted.
                             let start_idx = collection.route_count();
                             let res = collection.add_route(gpx.clone());
@@ -394,6 +426,14 @@ impl AppState {
                         if let Ok(mut collection) = self.route_collection.try_write() {
                             // The route will be appended; record the index where it will be inserted.
                             let start_idx = collection.route_count();
+                            // On wasm, we still tag the call (if profiling enabled) at this higher-level.
+                            #[cfg(feature = "profiling")]
+                            {
+                                let file_name =
+                                    path.file_name().unwrap_or_default().to_string_lossy();
+                                let tag = format!("file={},start_idx={}", file_name, start_idx);
+                                profiling::scope!("collection::add_route", tag.as_str());
+                            }
                             let res = collection.add_route(gpx.clone());
                             if res.is_ok() {
                                 start_idx_opt = Some(start_idx);

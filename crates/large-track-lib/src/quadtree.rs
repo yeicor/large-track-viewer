@@ -107,7 +107,14 @@ impl Quadtree {
         // in profiler traces when the `profiling` feature is enabled.
         #[cfg(feature = "profiling")]
         {
-            profiling::scope!("quadtree::new");
+            // Include the reference viewport size and bias as span attributes so that
+            // initialization traces can be filtered/aggregated by these important values.
+            let vpw = reference_pixel_viewport.width();
+            let vph = reference_pixel_viewport.height();
+            profiling::scope!(
+                "quadtree::new",
+                format!("viewport={:.0}x{:.0},bias={}", vpw, vph, bias).as_str()
+            );
             ::profiling::register_thread!("QuadtreeInit");
         }
 
@@ -132,8 +139,22 @@ impl Quadtree {
         // Profile per-route quadtree construction and mark the phase where segments are inserted.
         #[cfg(feature = "profiling")]
         {
-            profiling::scope!("quadtree::new_with_route");
-            profiling::scope!("quadtree::new_with_route:insert_segments");
+            // Attach the route index and number of tracks to the top-level scope so
+            // traces can be grouped by route size / index.
+            profiling::scope!(
+                "quadtree::new_with_route",
+                format!(
+                    "route_index={},tracks={}",
+                    route_index,
+                    route.tracks().len()
+                )
+                .as_str()
+            );
+            // Additional inner scope for the segment insertion phase; include route index.
+            profiling::scope!(
+                "quadtree::new_with_route:insert_segments",
+                format!("route_index={}", route_index).as_str()
+            );
         }
 
         let mut quadtree = Self::new(pixel_viewport, bias);
@@ -214,7 +235,20 @@ impl Quadtree {
         geo_viewport: Rect<f64>,
         screen_size: (f64, f64),
     ) -> Vec<SimplifiedSegment> {
-        profiling::scope!("quadtree::query");
+        // Annotate queries with viewport and screen size so traces show the spatial
+        // context that caused a heavy query.
+        #[cfg(feature = "profiling")]
+        profiling::scope!(
+            "quadtree::query",
+            format!(
+                "vw={:.1},vh={:.1},sw={:.0}x{:.0}",
+                geo_viewport.width(),
+                geo_viewport.height(),
+                screen_size.0,
+                screen_size.1
+            )
+            .as_str()
+        );
         let target_level = self.calculate_target_level(geo_viewport);
 
         // Calculate base tolerance using reference viewport
@@ -285,8 +319,16 @@ impl Quadtree {
         viewport: Rect<f64>,
     ) -> Option<SimplifiedSegment> {
         // Scope to observe per-segment simplification + clipping costs in traces.
+        // Attach route/track/segment indices and the tolerance value for richer filtering.
         #[cfg(feature = "profiling")]
-        profiling::scope!("quadtree::get_or_create_simplified_clipped");
+        profiling::scope!(
+            "quadtree::get_or_create_simplified_clipped",
+            format!(
+                "route={},track={},segment={},tol={:.3}",
+                raw.route_index, raw.track_index, raw.segment_index, tolerance
+            )
+            .as_str()
+        );
         // For chunked segments, we need a unique cache key that includes the chunk identity
         let chunk_hash = raw.original_indices.as_ref().map(|indices| {
             // Use first and last original index as part of key
