@@ -159,7 +159,7 @@ jobs:
         with:
           tool: trunk@0.21.14
 
-      - run: trunk build ../eframe-entrypoints/web/index.html --locked --release
+      - run: trunk build --public-url . ../eframe-entrypoints/web/index.html --locked --release
         working-directory: crates/large-track-viewer
 
       - run: |
