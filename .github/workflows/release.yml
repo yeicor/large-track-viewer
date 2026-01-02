@@ -181,7 +181,7 @@ jobs:
       # Publish GitHub Pages when a tag is pushed (release)
       - if: startsWith(github.ref, 'refs/tags/')
         name: Upload artifact for GitHub Pages
-        uses: actions/upload-pages-artifact@v1
+        uses: actions/upload-pages-artifact@v4
         with:
           path: crates/large-track-viewer/dist
 

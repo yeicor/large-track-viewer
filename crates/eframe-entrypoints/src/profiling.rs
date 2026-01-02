@@ -5,11 +5,11 @@ This module exposes a consistent API regardless of whether the heavy-weight
 profiling feature is compiled in. There are two implementations:
 
 - real: compiled only when `feature = "profiling"` are set.
-        This provides full tracing-chrome based profiling (reloadable layer,
-        FlushGuard lifecycle, trace file serving + Perfetto opening).
+  This provides full tracing-chrome based profiling (reloadable layer,
+  FlushGuard lifecycle, trace file serving + Perfetto opening).
 - stub: compiled in all other configurations (including release builds).
-        This provides no-op profiling functions and a sensible logging-only
-        initialization.
+  This provides no-op profiling functions and a sensible logging-only
+  initialization.
 
 Top-level API (always available):
 - `setup_logging_and_profiling()`
