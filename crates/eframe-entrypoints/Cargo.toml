@@ -14,7 +14,7 @@ crate-type = ["cdylib", "rlib"]
 default = ["native", "profiling"]
 native = ["tokio/rt-multi-thread"]
 web = ["tokio/rt"]
-android = ["eframe/android-game-activity"]
+android = ["native", "eframe/android-native-activity"]
 profiling = ["profiling/profile-with-tracing", "dep:tracing-chrome", "dep:open"]
 
 [dependencies]

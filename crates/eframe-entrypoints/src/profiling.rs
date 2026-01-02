@@ -103,28 +103,22 @@ mod inner {
             .with(fmt_layer);
 
         // Save reload handle in shared state
+        let new_state = Some(ProfilingState {
+            reload_handle,
+            guard: None,
+            trace_file: None,
+            served_trace_file: None,
+            http_server: None,
+            shutdown_tx: None,
+        });
         match profiling_state().lock() {
             Ok(mut guard) => {
-                *guard = Some(ProfilingState {
-                    reload_handle,
-                    guard: None,
-                    trace_file: None,
-                    served_trace_file: None,
-                    http_server: None,
-                    shutdown_tx: None,
-                });
+                *guard = new_state;
             }
             Err(poisoned) => {
                 tracing::warn!("Profiling state mutex poisoned during init; recovering");
                 let mut guard = poisoned.into_inner();
-                *guard = Some(ProfilingState {
-                    reload_handle,
-                    guard: None,
-                    trace_file: None,
-                    served_trace_file: None,
-                    http_server: None,
-                    shutdown_tx: None,
-                });
+                *guard = new_state;
             }
         }
 

@@ -120,7 +120,7 @@ macro_rules! eframe_app_lib {
         #[cfg(target_os = "android")]
         #[unsafe(no_mangle)] // SAFETY: there is no other global function of this name
         pub fn android_main(app: ::winit::platform::android::activity::AndroidApp) {
-            $crate::android_main_impl($app_name, app, $app_creator);
+            $crate::run::android_main($app_name, app, $app_creator);
         }
     };
 }
@@ -131,142 +131,14 @@ macro_rules! eframe_app_main {
         fn main() {
             #[cfg(not(target_arch = "wasm32"))]
             {
-                let rt = ::tokio::runtime::Builder::new_multi_thread()
-                    .enable_all()
-                    .build()
-                    .expect("Failed to create Tokio runtime");
-
-                rt.block_on(async {
-                    $crate::native_main_impl($app_name, $app_creator).await;
-                });
+                $crate::run::desktop_main($app_name, $app_creator);
             };
         }
 
         #[cfg(target_arch = "wasm32")]
         #[wasm_bindgen::prelude::wasm_bindgen(start)]
-        fn main_web() {
+        fn web_main() {
             $crate::web::set_app_creator($app_creator);
         }
     };
-}
-
-/// Internal implementation for Android entry point.
-/// Use the `eframe_app!` macro instead of calling this directly.
-///
-/// Notes:
-/// - When compiled in debug with the `profiling` feature, this function is
-///   instrumented and will register the main Android entry thread with the
-///   profiling backend so that traces show a meaningful thread name.
-/// - The `cfg_attr` ensures the profiling attribute is only applied in
-///   debug builds with the `profiling` feature enabled.
-#[cfg(target_os = "android")]
-#[doc(hidden)]
-pub fn android_main_impl(
-    app_name: &str,
-    app: winit::platform::android::activity::AndroidApp,
-    app_creator: impl FnOnce(&eframe::CreationContext<'_>) -> Box<dyn eframe::App> + Send + 'static,
-) {
-    use winit::platform::android::EventLoopBuilderExtAndroid;
-
-    android_logger::init_once(android_logger::Config::default());
-    log::info!("Starting {} on Android", app_name);
-
-    // Name the thread and create a short-lived scope for the Android main entry so
-    // profiler traces contain a clear entry point for application startup.
-    #[cfg(feature = "profiling")]
-    {
-        ::profiling::register_thread!("AndroidMain");
-        ::profiling::scope!("app::android_main_impl");
-    }
-
-    // Register the main thread name for logging/profiling in debug builds.
-    // When the `profiling` feature is enabled we register this thread so that
-    // profiler UIs can show a human-friendly thread name in traces.
-    #[cfg(feature = "profiling")]
-    {
-        // The profiling crate exposes a `register_thread` macro to name the current
-        // thread for profiler backends. Use a stable name for the Android main
-        // entry so traces include it.
-        //
-        // If your profiling crate exposes a different API (function vs macro),
-        // adjust this call accordingly.
-        ::profiling::register_thread!("AndroidMain");
-    }
-
-    unsafe {
-        // Safe: single-threaded at startup
-        std::env::set_var("RUST_BACKTRACE", "full");
-    }
-
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-
-    let app_name_owned = app_name.to_string();
-    rt.block_on(async {
-        log_version_info();
-
-        let native_options = eframe::NativeOptions {
-            viewport: egui::ViewportBuilder::default().with_title(&app_name_owned),
-            event_loop_builder: Some(Box::new(move |builder| {
-                builder.with_android_app(app);
-            })),
-            ..Default::default()
-        };
-
-        let _ = eframe::run_native(
-            &app_name_owned,
-            native_options,
-            Box::new(move |cc| Ok(app_creator(cc))),
-        );
-    });
-}
-
-/// Internal implementation for native (desktop) entry point.
-/// Use the `eframe_app!` macro instead of calling this directly.
-#[cfg(not(target_arch = "wasm32"))]
-#[doc(hidden)]
-pub async fn native_main_impl(
-    app_name: &str,
-    app_creator: impl FnOnce(&eframe::CreationContext<'_>) -> Box<dyn eframe::App>,
-) {
-    // Create a profiling scope marking native main startup so startup time and
-    // initialization work are visible in traces. This is a no-op when profiling
-    // is disabled.
-    #[cfg(feature = "profiling")]
-    {
-        ::profiling::scope!("app::native_main_impl");
-    }
-
-    // Initialize tracing subscriber with profiling support if enabled
-    // This MUST be done before any logging, so both fmt and chrome layers
-    // are registered together in the same subscriber
-    profiling::setup_logging_and_profiling();
-
-    // Register the main thread name for logging/profiling in debug builds.
-    // When the `profiling` feature is enabled we register this thread so that
-    // profiler UIs can show a human-friendly thread name in traces.
-    #[cfg(feature = "profiling")]
-    {
-        // Name the main native thread. If your profiling crate uses a function
-        // instead of a macro, update this line to call the correct API.
-        ::profiling::register_thread!("Main");
-    }
-
-    log_version_info();
-
-    let native_options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1280.0, 720.0])
-            .with_title(app_name)
-            .with_drag_and_drop(true),
-        ..Default::default()
-    };
-
-    let _ = eframe::run_native(
-        app_name,
-        native_options,
-        Box::new(move |cc| Ok(app_creator(cc))),
-    );
 }
