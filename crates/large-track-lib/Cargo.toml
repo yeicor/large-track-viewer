@@ -1,6 +1,6 @@
 [package]
 name = "large-track-lib"
-version = "0.2.5"
+version = "0.2.6"
 authors.workspace = true
 description = "Efficient storage and querying of large-scale GPX track collections with LOD quadtree indexing"
 repository.workspace = true
