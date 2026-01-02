@@ -59,15 +59,3 @@ web-sys.workspace = true
 tracing-wasm = "0.2"
 console_error_panic_hook = "0.1"
 tokio_with_wasm = { version = "0.8", features = ["rt", "sync", "time"] }
-
-# === Android ===
-[package.metadata.android]
-package = "com.github.yeicor.largetrackviewer"
-
-[package.metadata.android.application]
-label = "Large Track Viewer"
-
-[package.metadata.android.sdk]
-min_sdk_version = 23
-target_sdk_version = 35
-max_sdk_version = 35

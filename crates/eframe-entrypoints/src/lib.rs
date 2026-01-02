@@ -117,6 +117,9 @@ pub use eframe::CreationContext;
 #[macro_export]
 macro_rules! eframe_app_lib {
     ($app_name:expr, $app_creator:expr) => {
+        // Android entry point - matches sdf-viewer's approach:
+        // - Uses #[no_mangle] (not #[unsafe(no_mangle)]) for compatibility
+        // - Non-pub function as expected by android-activity crate
         #[cfg(target_os = "android")]
         #[unsafe(no_mangle)] // SAFETY: there is no other global function of this name
         pub fn android_main(app: ::winit::platform::android::activity::AndroidApp) {

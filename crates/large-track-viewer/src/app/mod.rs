@@ -31,7 +31,7 @@ pub struct OpenTopoMap;
 impl TileSource for OpenTopoMap {
     fn tile_url(&self, tile_id: TileId) -> String {
         format!(
-            "https://tile.opentopomap.org/{}/{}/{}.png",
+            "http://tile.opentopomap.org/{}/{}/{}.png",
             tile_id.zoom, tile_id.x, tile_id.y
         )
     }

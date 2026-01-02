@@ -1,16 +1,30 @@
 use shadow_rs::shadow;
-use tracing::info;
 
 shadow!(build);
 
+/// Log version info using the appropriate logging mechanism for the platform.
+/// On Android, we use the `log` crate (which android_logger handles).
+/// On other platforms, we use `tracing` (which our tracing_subscriber handles).
 #[allow(dead_code)] // Allow auto-generated code containing unused build metadata
 pub fn log_version_info() {
-    info!("{}", short_version_info());
-    info!(
-        "Build date: {} ({})",
-        build::BUILD_TIME_2822,
-        build::BUILD_RUST_CHANNEL
-    );
+    #[cfg(target_os = "android")]
+    {
+        log::info!("{}", short_version_info());
+        log::info!(
+            "Build date: {} ({})",
+            build::BUILD_TIME_2822,
+            build::BUILD_RUST_CHANNEL
+        );
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        tracing::info!("{}", short_version_info());
+        tracing::info!(
+            "Build date: {} ({})",
+            build::BUILD_TIME_2822,
+            build::BUILD_RUST_CHANNEL
+        );
+    }
 }
 #[allow(dead_code)] // Allow auto-generated code containing unused build metadata
 pub fn short_version_info() -> String {
