@@ -379,7 +379,6 @@ impl eframe::App for LargeTrackViewerApp {
 
         // Handle file picker
         // TODO: File picker on more platforms (required on mobile!)
-        #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
         ui_panels::show_file_picker(&mut self.state);
 
         // Show help overlay if enabled

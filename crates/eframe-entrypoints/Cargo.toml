@@ -14,7 +14,7 @@ crate-type = ["cdylib", "rlib"]
 default = ["native", "profiling"]
 native = ["tokio/rt-multi-thread"]
 web = ["tokio/rt"]
-android = ["eframe/android-native-activity"]
+android = ["eframe/android-game-activity"]
 profiling = ["profiling/profile-with-tracing", "dep:tracing-chrome", "dep:tracing-subscriber", "dep:open"]
 
 [dependencies]
@@ -36,17 +36,24 @@ tracing-chrome = { version = "0.7", optional = true }
 
 # === Misc ===
 shadow-rs = { version = "1.4", default-features = false }
+once_cell = "1.21"
 
 # === Native (desktop & mobile) ===
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tracing-subscriber = { version = "0.3", optional = true, features = ["env-filter"] }
 open = { version = "5.0", optional = true }
 
+# === Native (desktop) ===
+[target.'cfg(not(any(target_arch = "wasm32", target_os = "android")))'.dependencies]
+rfd = "0.15"
+
 # === Web ===
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen.workspace = true
 wasm-bindgen-futures = "*" # Same as wasm-bindgen
 web-sys.workspace = true
+web-sys.features = ["Window", "Document", "HtmlInputElement", "FileReader", "File", "Blob", "ProgressEvent", "EventTarget"]
+js-sys.workspace = true
 tracing-wasm = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 console_error_panic_hook = "0.1"

@@ -146,11 +146,17 @@ fn render_tracks_tab(ui: &mut Ui, state: &mut AppState) {
     ui.vertical(|ui| {
         ui.horizontal(|ui| {
             ui.scope(|ui| {
-                #[cfg(target_arch = "wasm32")]
-                ui.disable();
-                if ui.button("📂 Load").clicked() {
-                    state.file_loader.show_picker = true;
-                }
+                ui.scope(|ui| {
+                    // Unified Load button: call the cross-platform picker implementation.
+                    // On native this will open the desktop dialog (rfd) and enqueue bytes;
+                    // on web it will open the browser picker and read bytes via FileReader.
+                    let response = ui.button("📂 Load");
+                    if response.clicked() {
+                        let _ =
+                            eframe_entrypoints::file_picker::open_file_picker(Some(".gpx"), true);
+                    }
+                    response.on_hover_text("Drop GPX files here instead");
+                });
             });
             if ui.button("🎯 Fit").clicked() {
                 state.pending_fit_bounds = true;
@@ -497,32 +503,35 @@ fn render_settings_tab(ui: &mut Ui, state: &mut AppState) {
     ui.label(RichText::new("  Ctrl + Scroll - Zoom map").small().weak());
 }
 
-/// Show file picker dialog
-#[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+/// Cross-platform file picker integration.
+///
+/// This centralized function delegates to the reusable picker implemented in
+/// `eframe_entrypoints::web_file_picker`. It performs two duties:
+/// 1) Drain any already-read files from the shared queue and enqueue them into
+///    the app's FileLoader (so selections made previously appear quickly).
+/// 2) If `state.file_loader.show_picker` is true, open the platform picker and
+///    clear that flag. This keeps the previous UI dance intact while routing
+///    behavior through the reusable module.
 pub fn show_file_picker(state: &mut AppState) {
-    if state.file_loader.show_picker {
-        state.file_loader.show_picker = false;
-
-        if let Some(paths) = rfd::FileDialog::new()
-            .add_filter("GPX Files", &["gpx"])
-            .set_title("Select GPX Files")
-            .pick_files()
-        {
-            for path in paths {
+    // 1) Drain any previously-read files (web or native) into the loader.
+    if let Ok(files) = eframe_entrypoints::file_picker::drain_file_queue() {
+        if !files.is_empty() {
+            for (name, bytes) in files {
                 state.queue_file(egui::DroppedFile {
-                    name: path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_str()
-                        .unwrap_or_default()
-                        .to_owned(),
-                    path: Some(path),
+                    name,
+                    path: None,
+                    bytes: Some(bytes.into()),
                     ..Default::default()
                 });
             }
-            // Start parallel loading for newly added files
             state.start_parallel_load();
         }
+    }
+
+    // 2) If the UI requested the picker, open it now (cross-platform).
+    if state.file_loader.show_picker {
+        state.file_loader.show_picker = false;
+        let _ = eframe_entrypoints::file_picker::open_file_picker(Some(".gpx"), true);
     }
 }
 

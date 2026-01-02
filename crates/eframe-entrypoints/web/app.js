@@ -1,10 +1,3 @@
-// Set footer year dynamically for polish
-(() => {
-  const year = new Date().getFullYear();
-  const footerYear = document.getElementById("footer_year");
-  if (footerYear) footerYear.textContent = year;
-})();
-
 // Helper to log and show errors to the user
 function showError(message, callstack = null) {
   const centerText = document.getElementById("center_text");
@@ -165,7 +158,7 @@ async function initNativeAppBanner() {
   dismissBtn.onclick = () => {
     banner.style.transition = "opacity 0.3s, transform 0.3s";
     banner.style.opacity = "0";
-    banner.style.transform = "translateX(-50%) translateY(20px)";
+    banner.style.transform = "translateX(-50%) translateY(10px)";
     setTimeout(() => {
       banner.style.display = "none";
     }, 300);

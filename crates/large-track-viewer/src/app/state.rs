@@ -233,13 +233,23 @@ impl AppState {
     // Load a single file
     #[cfg_attr(feature = "profiling", profiling::function)]
     async fn load_file_to_gpx(file: &DroppedFile) -> Result<gpx::Gpx, String> {
-        let buf = {
+        let buf = if let Some(bs) = file.bytes.as_ref() {
+            bs.to_vec()
+        } else {
+            #[cfg(target_arch = "wasm32")]
+            {
+                return Err("File bytes not available on WASM".to_string());
+            }
             #[cfg(not(target_arch = "wasm32"))]
             {
                 use tokio::io::AsyncReadExt;
-                let file = tokio::fs::File::open(file.path.as_ref().unwrap())
-                    .await
-                    .map_err(|e| format!("Error opening file: {:?}", e))?;
+                let file = tokio::fs::File::open(
+                    file.path
+                        .as_ref()
+                        .expect("file was read or has a path to be read from"),
+                )
+                .await
+                .map_err(|e| format!("Error opening file: {:?}", e))?;
                 let mut reader = tokio::io::BufReader::new(file);
                 let mut buf = Vec::new();
                 reader
@@ -247,13 +257,6 @@ impl AppState {
                     .await
                     .map_err(|e| format!("Failed to read file: {}", e))?;
                 buf
-            }
-            #[cfg(target_arch = "wasm32")]
-            {
-                // On wasm, ensure bytes are present; if not, return an error instead of panicking.
-                file.bytes
-                    .clone()
-                    .ok_or_else(|| "No file bytes available for dropped file".to_string())?
             }
         };
         let cursor = std::io::Cursor::new(buf);
@@ -536,43 +539,6 @@ impl AppState {
         // If a parallel load is already in progress, let that continue.
         if self.is_parallel_loading() {
             return;
-        }
-
-        // WASM-specific incremental processing: spawn exactly one async loader
-        // for a single pending file so we don't block the main thread by parsing
-        // many files synchronously in a single frame.
-        #[cfg(target_arch = "wasm32")]
-        {
-            // Pop a single pending file (if any)
-            if let Some(dropped_file) = self.file_loader.pending_files.pop() {
-                // Indicate we have one outstanding async file to process.
-                self.file_loader
-                    .parallel_total_files
-                    .store(1, std::sync::atomic::Ordering::SeqCst);
-
-                let results = self.file_loader.parallel_load_results.clone();
-
-                // Spawn a single cooperative task that performs the IO+parse off the
-                // immediate synchronous path and pushes the result to the shared queue.
-                async_runtime::spawn(async move {
-                    let res = Self::load_file_to_gpx(&dropped_file).await;
-                    let path = synthetic_path_for(&dropped_file);
-                    let mut guard = results
-                        .lock()
-                        .expect("failed to acquire lock on parallel_load_results mutex to push worker result");
-                    guard.push((path, res));
-                    // Yield to the event loop to keep things responsive
-                    async_runtime::yield_now().await;
-                });
-            }
-            return;
-        }
-
-        // Non-wasm platforms rely on start_parallel_load / worker threads and
-        // process_parallel_results to handle incremental processing.
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            // No-op here; native parallel loading handles pending files.
         }
     }
 

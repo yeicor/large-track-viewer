@@ -59,6 +59,9 @@ pub use metadata::{log_version_info, short_version_info};
 #[cfg(target_arch = "wasm32")]
 pub mod web;
 
+/// Reusable web file picker utilities (implemented in `src/web_file_picker.rs`).
+pub mod file_picker;
+
 // Re-export eframe types commonly needed for app creation
 pub use eframe;
 pub use eframe::CreationContext;
