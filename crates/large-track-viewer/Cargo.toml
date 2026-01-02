@@ -14,7 +14,7 @@ crate-type = ["cdylib", "rlib"]
 default = ["native"]
 native = ["eframe-entrypoints/native"]
 web = ["eframe-entrypoints/web"]
-android = []
+android = ["eframe-entrypoints/android"]
 profiling = ["eframe-entrypoints/profiling"]
 
 [dependencies]
