@@ -13,21 +13,25 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// Generate a stable synthetic path for a dropped file when a real path is unavailable.
-/// Web-dropped files often don't include a filesystem path. We use a "web://" prefix
-/// combined with a unique atomic counter and the file size (when available) to
-/// produce a unique identifier for web-only dropped files. If a real filesystem
-/// path is present, it is returned unchanged.
 fn synthetic_path_for(dropped: &DroppedFile) -> PathBuf {
-    if let Some(p) = dropped.path.as_ref() {
+    // Avoid duplicates by appending hash of content.
+    let fakepath = if let Some(p) = dropped.path.as_ref() {
         p.clone()
     } else {
-        // Keep the counter static inside this function to avoid requiring a top-level import.
-        static SYNTHETIC_COUNTER: std::sync::atomic::AtomicU64 =
-            std::sync::atomic::AtomicU64::new(1);
-        let id = SYNTHETIC_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let size = dropped.bytes.as_ref().map(|b| b.len()).unwrap_or(0);
         // Produce a URI-like synthetic identifier: web://<id>-<size>-<name>
-        PathBuf::from(format!("web://{}-{}-{}", id, size, dropped.name))
+        PathBuf::from(format!("{}", dropped.name))
+    };
+    if let Some(bytes) = &dropped.bytes {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::Hash;
+        use std::hash::Hasher;
+        let mut hasher = DefaultHasher::new();
+        bytes.hash(&mut hasher);
+        let hash_str = format!("{:x}", hasher.finish());
+        let hash_str = hash_str[..8.min(hash_str.len())].to_string();
+        PathBuf::from(format!("{}-{}", fakepath.display(), hash_str))
+    } else {
+        fakepath
     }
 }
 
@@ -135,9 +139,6 @@ pub struct FileLoader {
     /// loaded files to route indices later (for selection & highlighting).
     pub loaded_files: Vec<(PathBuf, gpx::Gpx, usize)>,
 
-    /// Show file picker dialog
-    pub show_picker: bool,
-
     /// Results from parallel loading (path, result) - accumulated incrementally
     #[allow(clippy::type_complexity)]
     pub parallel_load_results: Arc<Mutex<Vec<(PathBuf, Result<gpx::Gpx, String>)>>>,
@@ -212,7 +213,6 @@ impl AppState {
                 .collect(),
             errors: Vec::new(),
             loaded_files: Vec::new(),
-            show_picker: false,
             parallel_load_results: Arc::new(Mutex::new(Vec::new())),
             parallel_total_files: Arc::new(AtomicUsize::new(0)),
         };
@@ -354,7 +354,7 @@ impl AppState {
         // Check if we're done (all added)
         let total = self.file_loader.parallel_total_files.load(Ordering::SeqCst);
 
-        let added = self.file_loader.loaded_files.len() + self.file_loader.errors.len();
+        let added = self.file_loader.loaded_files.len();
 
         // Attach a short data tag with processed/total counts so this helper is
         // easily filterable in traces without emitting events.
@@ -472,9 +472,20 @@ impl AppState {
             Err(e) => {
                 // Preserve the error String for both storage and transient UI feedback.
                 self.file_loader.errors.push((path, e));
-                self.file_loader
-                    .parallel_total_files
-                    .fetch_sub(1, Ordering::SeqCst);
+                // Safely decrement the total count, preventing underflow if it is already zero.
+                // Use a compare-exchange loop so we only subtract when the current value > 0.
+                let mut prev = self.file_loader.parallel_total_files.load(Ordering::SeqCst);
+                while prev > 0 {
+                    match self.file_loader.parallel_total_files.compare_exchange(
+                        prev,
+                        prev - 1,
+                        Ordering::SeqCst,
+                        Ordering::SeqCst,
+                    ) {
+                        Ok(_) => break,
+                        Err(actual) => prev = actual,
+                    }
+                }
                 // No need to increment a processed counter; progress is now based on loaded_files + errors.
             }
         }
@@ -517,7 +528,7 @@ impl AppState {
     /// Get loading status text
     pub fn loading_status(&self) -> String {
         let total = self.file_loader.parallel_total_files.load(Ordering::SeqCst);
-        let processed = self.file_loader.loaded_files.len() + self.file_loader.errors.len();
+        let processed = self.file_loader.loaded_files.len();
         if processed < total {
             format!("{}/{}", processed, total)
         } else {

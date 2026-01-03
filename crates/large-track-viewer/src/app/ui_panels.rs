@@ -6,6 +6,15 @@
 use crate::app::state::{AppState, SidebarTab, TilesProvider};
 use egui::{Color32, RichText, Ui};
 
+/// Check if a filename is already loaded to avoid duplicates
+fn is_filename_already_loaded(state: &AppState, filename: &str) -> bool {
+    state.file_loader.loaded_files.iter().any(|(path, _, _)| {
+        path.file_name()
+            .map(|n| n.to_string_lossy() == filename)
+            .unwrap_or(false)
+    })
+}
+
 /// Render the sidebar toggle button (overlaid on top-right of map)
 pub fn sidebar_toggle_button(ui: &mut Ui, state: &mut AppState) {
     // UI panel specific profiling scope to help attribute time spent in UI layout/draw.
@@ -144,19 +153,27 @@ fn render_tracks_tab(ui: &mut Ui, state: &mut AppState) {
 
     // Action buttons at top
     ui.vertical(|ui| {
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.scope(|ui| {
-                ui.scope(|ui| {
-                    // Unified Load button: call the cross-platform picker implementation.
-                    // On native this will open the desktop dialog (rfd) and enqueue bytes;
-                    // on web it will open the browser picker and read bytes via FileReader.
-                    let response = ui.button("📂 Load");
-                    if response.clicked() {
-                        let _ =
-                            eframe_entrypoints::file_picker::open_file_picker(Some(".gpx"), true);
-                    }
-                    response.on_hover_text("Drop GPX files here instead");
-                });
+                #[cfg(target_os = "android")]
+                ui.disable();
+                let response = ui.button("📂 Load (native)");
+                if response.clicked() {
+                    #[cfg(not(target_os = "android"))]
+                    let _ = eframe_entrypoints::file_picker::open_native_file_picker(
+                        Some(".gpx"),
+                        true,
+                    );
+                }
+                response.on_hover_text("You can also drag and drop GPX files onto the window");
+            });
+            ui.scope(|ui| {
+                let response = ui.button("📂 Load (internal)");
+                if response.clicked() {
+                    let _ =
+                        eframe_entrypoints::file_picker::open_rust_file_picker(Some(".gpx"), true);
+                }
+                response.on_hover_text("You can also drag and drop GPX files onto the window");
             });
             if ui.button("🎯 Fit").clicked() {
                 state.pending_fit_bounds = true;
@@ -512,26 +529,21 @@ fn render_settings_tab(ui: &mut Ui, state: &mut AppState) {
 /// 2) If `state.file_loader.show_picker` is true, open the platform picker and
 ///    clear that flag. This keeps the previous UI dance intact while routing
 ///    behavior through the reusable module.
-pub fn show_file_picker(state: &mut AppState) {
-    // 1) Drain any previously-read files (web or native) into the loader.
+pub fn manage_pending_files(state: &mut AppState) {
     if let Ok(files) = eframe_entrypoints::file_picker::drain_file_queue()
         && !files.is_empty()
     {
         for (name, bytes) in files {
-            state.queue_file(egui::DroppedFile {
-                name,
-                path: None,
-                bytes: Some(bytes.into()),
-                ..Default::default()
-            });
+            if !is_filename_already_loaded(state, &name) {
+                state.queue_file(egui::DroppedFile {
+                    name,
+                    path: None,
+                    bytes: Some(bytes.into()),
+                    ..Default::default()
+                });
+            }
         }
         state.start_parallel_load();
-    }
-
-    // 2) If the UI requested the picker, open it now (cross-platform).
-    if state.file_loader.show_picker {
-        state.file_loader.show_picker = false;
-        let _ = eframe_entrypoints::file_picker::open_file_picker(Some(".gpx"), true);
     }
 }
 
@@ -611,8 +623,16 @@ pub fn handle_drag_and_drop(ctx: &egui::Context, state: &mut AppState) {
             .unwrap_or(false);
 
         if is_gpx {
-            state.queue_file(dropped_file.clone());
-            files_dropped = true;
+            let filename = dropped_file
+                .path
+                .as_ref()
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| dropped_file.name.clone());
+            if !is_filename_already_loaded(state, &filename) {
+                state.queue_file(dropped_file.clone());
+                files_dropped = true;
+            }
         }
     }
     if files_dropped {

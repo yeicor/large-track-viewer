@@ -47,7 +47,7 @@ where
 #[cfg(target_arch = "wasm32")]
 pub fn spawn<F>(future: F) -> tokio_with_wasm::task::JoinHandle<F::Output>
 where
-    F: std::future::Future + Send + 'static,
+    F: std::future::Future + 'static,
     F::Output: Send + 'static,
 {
     // On wasm the same wrapper pattern applies: create a profiling scope inside

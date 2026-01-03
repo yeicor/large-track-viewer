@@ -287,7 +287,6 @@ impl LargeTrackViewerApp {
             pending_files,
             errors: Vec::new(),
             loaded_files: Vec::new(),
-            show_picker: false,
             // Use a standard mutex for the results queue and an atomic counter for totals.
             // This simplifies concurrency: workers push into the mutex-protected Vec and
             // update the atomic counter; the UI thread can lock briefly to pop results.
@@ -377,9 +376,9 @@ impl eframe::App for LargeTrackViewerApp {
         // Handle drag and drop
         ui_panels::handle_drag_and_drop(ctx, &mut self.state);
 
-        // Handle file picker
-        // TODO: File picker on more platforms (required on mobile!)
-        ui_panels::show_file_picker(&mut self.state);
+        // Handle internal file chooser
+        eframe_entrypoints::file_picker::render_rust_file_dialog(ctx);
+        ui_panels::manage_pending_files(&mut self.state);
 
         // Show help overlay if enabled
         if self.show_help {

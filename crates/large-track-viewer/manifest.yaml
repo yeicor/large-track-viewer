@@ -1,5 +1,9 @@
 android:
   manifest:
+    package: "com.github.yeicor.largetrackviewer"
+    application:
+      label: "Large Track Viewer"
     uses_permission:
-      - name: android.permission.INTERNET
-      - name: android.permission.ACCESS_NETWORK_STATE
+      - name: "android.permission.INTERNET" # Download map tiles
+      #- name: "android.permission.ACCESS_NETWORK_STATE"
+      - name: "android.permission.READ_EXTERNAL_STORAGE" # Read user's track files

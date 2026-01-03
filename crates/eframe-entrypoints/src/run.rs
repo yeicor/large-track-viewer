@@ -3,8 +3,6 @@
 //! This module provides generic entry point functions that can be used by any
 //! egui/eframe application. For the recommended API, use the `eframe_app!` macro.
 
-use crate::log_version_info;
-
 /// Native entry point for desktop and Android.
 ///
 /// On Android, the `AndroidApp` must be set on `NativeOptions.android_app`.
@@ -29,7 +27,7 @@ pub fn native_main<F>(
     #[cfg(feature = "profiling")]
     ::profiling::register_thread!("Main");
 
-    log_version_info();
+    crate::log_version_info();
 
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()

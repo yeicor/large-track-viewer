@@ -3,10 +3,9 @@
 //! This module exposes a simple cross-platform API for showing a file picker
 //! and retrieving selected files as (name, bytes).
 //!
-//! - On native (desktop) targets: uses `rfd` to show the native file picker,
-//!   reads selected files into memory and enqueues them for retrieval.
-//! - On wasm (web) targets: uses an invisible `<input type="file">` and
-//!   `FileReader` to read files, pushing bytes into a shared Rust-side queue.
+//! - On native (desktop) and wasm (web) targets: uses `rfd` async API to show
+//!   the file picker, reads selected files into memory and enqueues them for retrieval.
+//! - On Android: uses JNI to call a Java bridge class that shows the file picker.
 //!
 //! The shared queue is implemented with `once_cell::sync::Lazy` + `Mutex` so
 //! callers can call `open_file_picker(...)` followed by `drain_file_queue()`
@@ -20,148 +19,160 @@ type QueueEntry = (String, Vec<u8>);
 type Queue = Vec<QueueEntry>;
 static QUEUE: Lazy<Mutex<Queue>> = Lazy::new(|| Mutex::new(Vec::new()));
 
-#[cfg(target_arch = "wasm32")]
-mod imp {
+#[cfg(not(target_os = "android"))]
+mod rfd {
     use super::QUEUE;
-    use js_sys::Uint8Array;
-    use std::rc::Rc;
-    use wasm_bindgen::JsCast;
-    use wasm_bindgen::closure::Closure;
-    use web_sys::{FileReader, HtmlInputElement};
 
-    /// Open the browser file picker and read selected files into the shared queue.
-    /// `accept` and `multiple` behave like the native input attributes.
-    pub fn open_file_picker(accept: Option<&str>, multiple: bool) -> Result<(), String> {
-        let window = web_sys::window().ok_or_else(|| "no window".to_string())?;
-        let document = window.document().ok_or_else(|| "no document".to_string())?;
+    /// Async implementation that uses rfd's AsyncFileDialog.
+    /// Works on both native (desktop) and wasm (web) targets.
+    async fn open_file_picker_async(accept: Option<&str>, multiple: bool) -> Result<(), String> {
+        let mut dialog = rfd::AsyncFileDialog::new();
 
-        let input_elem = document
-            .create_element("input")
-            .map_err(|e| format!("create_element failed: {:?}", e))?;
-        let input: HtmlInputElement = input_elem
-            .dyn_into::<HtmlInputElement>()
-            .map_err(|e| format!("dyn_into HtmlInputElement failed: {:?}", e))?;
-
-        input.set_type("file");
-        input.set_multiple(multiple);
         if let Some(acc) = accept {
-            input.set_accept(acc);
-        }
-        input.style().set_property("display", "none").ok();
-
-        let input_for_closure = input.clone();
-        let onchange = Closure::wrap(Box::new(move |_evt: web_sys::Event| {
-            if let Some(files) = input_for_closure.files() {
-                for i in 0..files.length() {
-                    if let Some(file) = files.get(i) {
-                        let file_name = file.name();
-                        let reader = FileReader::new().expect("failed to create FileReader");
-                        let reader_clone = reader.clone();
-                        // Use Rc so the filename can be cheaply cloned inside the onload closure
-                        let name_clone = Rc::new(file_name);
-
-                        let onload = Closure::wrap(Box::new(move |_e: web_sys::ProgressEvent| {
-                            if let Ok(result) = reader_clone.result() {
-                                // Convert ArrayBuffer -> Vec<u8>
-                                let uint8 = Uint8Array::new(&result);
-                                let mut vec = vec![0u8; uint8.length() as usize];
-                                uint8.copy_to(&mut vec);
-                                if let Ok(mut guard) = QUEUE.lock() {
-                                    // clone the String out of the Rc without moving the Rc itself
-                                    guard.push((name_clone.as_ref().clone(), vec));
-                                }
-                            }
-                        }) as Box<dyn FnMut(_)>);
-
-                        reader.set_onload(Some(onload.as_ref().unchecked_ref()));
-                        let _ = reader.read_as_array_buffer(&file);
-                        onload.forget();
-                    }
-                }
-            }
-        }) as Box<dyn FnMut(_)>);
-
-        input.set_onchange(Some(onchange.as_ref().unchecked_ref()));
-        onchange.forget();
-
-        if let Some(body) = document.body() {
-            let _ = body.append_child(&input);
-            let _ = input.click();
-
-            // Schedule removal
-            let input_for_removal = input.clone();
-            let remover = Closure::wrap(Box::new(move || {
-                if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-                    if let Some(body) = doc.body() {
-                        let _ = body.remove_child(&input_for_removal);
-                    }
-                }
-            }) as Box<dyn Fn()>);
-            let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(
-                remover.as_ref().unchecked_ref(),
-                500,
-            );
-            remover.forget();
-        }
-
-        Ok(())
-    }
-}
-
-#[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
-mod imp {
-    use super::QUEUE;
-    use std::path::PathBuf;
-
-    /// Open native file picker using rfd, read selected files to bytes and enqueue.
-    pub fn open_file_picker(accept: Option<&str>, multiple: bool) -> Result<(), String> {
-        // Map simple accept like ".gpx" -> extension filter for rfd
-        let mut dialog = rfd::FileDialog::new();
-        if let Some(acc) = accept {
-            // naive: if acc starts with '.', treat as extension
+            // If accept starts with '.', treat as extension filter
             if let Some(ext) = acc.strip_prefix('.') {
                 dialog = dialog.add_filter(format!("{} files", ext), &[ext]);
-            } else {
-                // otherwise ignore (rfd supports glob patterns in filters but we'll keep simple)
             }
         }
-        let paths: Option<Vec<PathBuf>> = if multiple {
-            dialog.pick_files()
+
+        let handles = if multiple {
+            dialog.pick_files().await
         } else {
-            dialog.pick_file().map(|p| vec![p])
+            dialog.pick_file().await.map(|h| vec![h])
         };
 
-        if let Some(paths) = paths {
-            for path in paths {
-                // Read file to bytes
-                match std::fs::read(&path) {
-                    Ok(bytes) => {
-                        let name = path
-                            .file_name()
-                            .map(|s| s.to_string_lossy().to_string())
-                            .unwrap_or_else(|| "file".to_string());
-                        if let Ok(mut guard) = QUEUE.lock() {
-                            guard.push((name, bytes));
-                        }
-                    }
-                    Err(e) => {
-                        return Err(format!("failed to read file {:?}: {}", path, e));
-                    }
+        if let Some(handles) = handles {
+            for handle in handles {
+                let name = handle.file_name();
+                let bytes = handle.read().await;
+                if let Ok(mut guard) = QUEUE.lock() {
+                    guard.push((name, bytes));
                 }
             }
         }
+
+        Ok(())
+    }
+
+    /// Open the file picker using rfd's async API.
+    /// On wasm, spawns via wasm_bindgen_futures.
+    /// On native, spawns a thread and blocks on the future.
+    pub fn open_file_picker(accept: Option<&str>, multiple: bool) -> Result<(), String> {
+        // Clone accept string for the async block
+        let accept_owned = accept.map(|s| s.to_string());
+
+        // Reuse the crate's shared async runtime abstraction to run the rfd async picker.
+        // The picker uses JS futures on web which are !Send, so we must use
+        // `wasm_bindgen_futures::spawn_local` on wasm. On native, use the crate
+        // runtime wrapper which expects a `Send` future.
+        let fut = async move {
+            let _ = open_file_picker_async(accept_owned.as_deref(), multiple).await;
+        };
+
+        // Spawn using the crate's async runtime on all targets.
+        let _ = crate::async_runtime::spawn(fut);
         Ok(())
     }
 }
 
-#[cfg(target_os = "android")]
-mod imp {
-    pub fn open_file_picker(_accept: Option<&str>, _multiple: bool) -> Result<(), String> {
-        Err("Android unsupported".to_string())
+mod rust {
+    use egui_file_dialog::FileDialog;
+    use once_cell::sync::Lazy;
+    use std::sync::Mutex;
+
+    static DIALOG: Lazy<Mutex<Option<FileDialog>>> = Lazy::new(|| Mutex::new(None));
+
+    pub fn open_file_picker(accept: Option<&str>, multiple: bool) -> Result<(), String> {
+        #[cfg(target_os = "android")]
+        let default_dir = {
+            request_storage_permission().expect("failed to request storage permission");
+            std::path::PathBuf::from("/sdcard");
+        };
+        #[cfg(not(target_os = "android"))]
+        let default_dir = std::env::var("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let mut dialog = FileDialog::new().initial_directory(default_dir);
+
+        if let Some(acc) = accept {
+            // egui-file-dialog supports filters; for simplicity, treat as name filter if starts with '.'
+            if let Some(ext) = acc.strip_prefix('.') {
+                // Make an owned string so the closure can be 'static when wrapped in Arc.
+                let ext_owned = ext.to_string();
+                // Create a label owned by this stack frame for the call (it's not stored beyond the call).
+                let label = format!("{} files", ext_owned);
+                dialog = dialog.default_file_filter(&label).add_file_filter(
+                    label.as_str(),
+                    std::sync::Arc::new(move |p: &std::path::Path| {
+                        p.extension().and_then(|s| s.to_str()).unwrap_or_default() == ext_owned
+                    }),
+                );
+            }
+        }
+
+        if multiple {
+            dialog.pick_multiple();
+        } else {
+            dialog.pick_file();
+        }
+
+        *DIALOG.lock().unwrap() = Some(dialog);
+        Ok(())
+    }
+    
+    #[cfg(target_os = "android")]
+    fn request_storage_permission() -> Result<(), String> {
+        
+    }
+
+    /// Helper to hook into GUI rendering code. Call this in your egui UI to show the file dialog.
+    /// It will handle selection and enqueue files automatically.
+    pub fn render_file_dialog(ctx: &egui::Context) {
+        #[cfg(not(target_arch = "wasm32"))]
+        let mut drop_dialog = false;
+        if let Some(dialog) = DIALOG.lock().unwrap().as_mut() {
+            dialog.update(ctx);
+            // No support for file operations on web
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(paths) = dialog
+                .take_picked_multiple()
+                .or_else(move || dialog.take_picked().map(|p| vec![p]))
+            {
+                // Offload file reads to the async runtime so we don't block the UI thread.
+                for path in paths {
+                    // Capture the file name before moving `path` into the async task.
+                    let name = path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+                    let path_for_task = path.clone();
+
+                    // Spawn an async task via the crate runtime and use tokio's async file API
+                    // to read the file without blocking threads.
+                    let _ = crate::async_runtime::spawn(async move {
+                        if let Ok(bytes) = tokio::fs::read(path_for_task).await {
+                            if let Ok(mut guard) = super::QUEUE.lock() {
+                                guard.push((name, bytes));
+                            }
+                        }
+                        // ignore errors; nothing to do on failure
+                    });
+                }
+                drop_dialog = true;
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if drop_dialog {
+            *DIALOG.lock().unwrap() = None;
+        }
     }
 }
 
-pub use imp::open_file_picker;
+#[cfg(not(target_os = "android"))]
+pub use rfd::open_file_picker as open_native_file_picker;
+pub use rust::open_file_picker as open_rust_file_picker;
+pub use rust::render_file_dialog as render_rust_file_dialog;
 
 /// Drain the shared Rust-side queue and return all picked files.
 #[allow(dead_code)]
