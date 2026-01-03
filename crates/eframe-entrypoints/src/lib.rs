@@ -132,7 +132,7 @@ macro_rules! eframe_app_lib {
 macro_rules! eframe_app_main {
     ($app_name:expr, $app_creator:expr) => {
         fn main() {
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
             {
                 $crate::run::desktop_main($app_name, $app_creator);
             };

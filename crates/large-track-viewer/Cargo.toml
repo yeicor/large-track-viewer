@@ -59,3 +59,16 @@ web-sys.workspace = true
 tracing-wasm = "0.2"
 console_error_panic_hook = "0.1"
 tokio_with_wasm = { version = "0.8", features = ["rt", "sync", "time"] }
+
+[package.metadata.android]
+package = "com.github.yeicor.largetrackviewer"
+
+[[package.metadata.android.application.activity]]
+name = "com.github.yeicor.largetrackviewer.LargeTrackViewerActivity"
+label = "Large Track Viewer"
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.INTERNET" # Download map tiles
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.READ_EXTERNAL_STORAGE" # Read user's track files

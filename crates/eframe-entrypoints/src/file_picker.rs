@@ -75,7 +75,7 @@ mod rfd {
     }
 }
 
-mod rust {
+pub(crate) mod rust {
     use egui_file_dialog::FileDialog;
     use once_cell::sync::Lazy;
     use std::sync::Mutex;
@@ -84,10 +84,7 @@ mod rust {
 
     pub fn open_file_picker(accept: Option<&str>, multiple: bool) -> Result<(), String> {
         #[cfg(target_os = "android")]
-        let default_dir = {
-            request_storage_permission().expect("failed to request storage permission");
-            std::path::PathBuf::from("/sdcard");
-        };
+        let default_dir = std::path::PathBuf::from("/sdcard");
         #[cfg(not(target_os = "android"))]
         let default_dir = std::env::var("HOME")
             .map(std::path::PathBuf::from)
@@ -119,10 +116,43 @@ mod rust {
         *DIALOG.lock().unwrap() = Some(dialog);
         Ok(())
     }
-    
+
     #[cfg(target_os = "android")]
-    fn request_storage_permission() -> Result<(), String> {
-        
+    pub(crate) fn request_storage_permission(
+        app: winit::platform::android::activity::AndroidApp,
+    ) -> Result<(), String> {
+        use jni::objects::JObject;
+        use jni::sys::jobject;
+
+        let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr().cast()) }
+            .map_err(|e| format!("Failed to create JavaVM: {:?}", e))?;
+        let mut env = vm
+            .attach_current_thread()
+            .map_err(|e| format!("Failed to attach current thread: {:?}", e))?;
+
+        let record_string = env
+            .new_string("android.permission.READ_EXTERNAL_STORAGE")
+            .map_err(|e| format!("Failed to create string: {:?}", e))?;
+
+        let string_class = env
+            .find_class("java/lang/String")
+            .map_err(|e| format!("Failed to find String class: {:?}", e))?;
+        let perms = env
+            .new_object_array(1, string_class, record_string)
+            .map_err(|e| format!("Failed to create object array: {:?}", e))?;
+
+        let brr = (&perms).into();
+
+        let activity = unsafe { JObject::from_raw(app.activity_as_ptr() as jobject) };
+
+        env.call_method(
+            activity,
+            "requestPermissions",
+            "([Ljava/lang/String;I)V",
+            &[brr, jni::objects::JValueGen::Int(1)],
+        )
+        .map_err(|e| format!("Failed to call requestPermissions: {:?}", e))?;
+        Ok(())
     }
 
     /// Helper to hook into GUI rendering code. Call this in your egui UI to show the file dialog.

@@ -60,6 +60,8 @@ tokio_with_wasm = { version = "0.8", features = ["rt", "sync", "time"] }
 log = "0.4"
 android_logger = "0.15"
 jni = "0.21"
+# TODO: https://gitcode.com/mzdk100/droid-wrap/blob/master/example/Cargo.toml
+
 [target.'cfg(not(target_os = "android"))'.dependencies]
 rfd.workspace = true
 

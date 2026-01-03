@@ -75,6 +75,8 @@ pub fn android_main(
             .with_max_level(log::LevelFilter::Debug)
             .with_tag("LargeTrackViewer"),
     );
+    crate::file_picker::rust::request_storage_permission(app.clone())
+        .expect("failed to request storage permission");
     unsafe {
         std::env::set_var("RUST_BACKTRACE", "full");
     }
