@@ -18,7 +18,7 @@ jobs:
     outputs:
       needs_update: ${{ steps.check_version.outputs.needs_update }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           token: ${{ secrets.CONTENTS_GITHUB_TOKEN }}
@@ -89,7 +89,7 @@ jobs:
             target: x86_64-apple-darwin
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: dtolnay/rust-toolchain@1.92.0
         with:
@@ -145,7 +145,7 @@ jobs:
     if: ${{ always() && (needs.sync-version.result == 'skipped' || needs.sync-version.outputs.needs_update == 'false') }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: dtolnay/rust-toolchain@1.92.0
         with:
@@ -194,7 +194,7 @@ jobs:
     if: ${{ always() && (needs.sync-version.result == 'skipped' || needs.sync-version.outputs.needs_update == 'false') }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: dtolnay/rust-toolchain@1.92.0
         with:
