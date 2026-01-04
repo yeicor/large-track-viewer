@@ -19,7 +19,7 @@ fn synthetic_path_for(dropped: &DroppedFile) -> PathBuf {
         p.clone()
     } else {
         // Produce a URI-like synthetic identifier: web://<id>-<size>-<name>
-        PathBuf::from(format!("{}", dropped.name))
+        PathBuf::from(dropped.name.clone())
     };
     if let Some(bytes) = &dropped.bytes {
         use std::collections::hash_map::DefaultHasher;

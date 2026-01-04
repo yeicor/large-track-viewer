@@ -80,7 +80,7 @@ mod rfd {
         };
 
         // Spawn using the crate's async runtime on all targets.
-        let _ = crate::async_runtime::spawn(fut);
+        std::mem::drop(crate::async_runtime::spawn(fut));
         Ok(())
     }
 }
@@ -243,14 +243,14 @@ pub(crate) mod rust {
 
                     // Spawn an async task via the crate runtime and use tokio's async file API
                     // to read the file without blocking threads.
-                    let _ = crate::async_runtime::spawn(async move {
-                        if let Ok(bytes) = tokio::fs::read(path_for_task).await {
-                            if let Ok(mut guard) = super::QUEUE.lock() {
-                                guard.push((name, bytes));
-                            }
+                    std::mem::drop(crate::async_runtime::spawn(async move {
+                        if let Ok(bytes) = tokio::fs::read(path_for_task).await
+                            && let Ok(mut guard) = super::QUEUE.lock()
+                        {
+                            guard.push((name, bytes));
                         }
                         // ignore errors; nothing to do on failure
-                    });
+                    }));
                 }
                 drop_dialog = true;
             }

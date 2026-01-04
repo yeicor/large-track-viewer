@@ -23,13 +23,7 @@ mod inner {
     use tracing_subscriber::prelude::*;
 
     #[cfg(feature = "profiling")]
-    use std::path::PathBuf;
-    #[cfg(feature = "profiling")]
-    use std::sync::Mutex;
-
-    #[cfg(feature = "profiling")]
-    #[cfg(feature = "profiling")]
-    use tracing_chrome::FlushGuard;
+    use {std::path::PathBuf, std::sync::Mutex, tracing_chrome::FlushGuard};
     #[cfg(feature = "profiling")]
     // Export a small helper macro to allow other parts of the crate to register
     // the current thread with the profiling backend. This proxies directly to
@@ -40,6 +34,7 @@ mod inner {
     //   register_profiling_thread!("WorkerName");
     //
     // Note: the macro expects a string literal.
+    #[allow(clippy::duplicated_attributes)]
     #[cfg(feature = "profiling")]
     #[macro_export]
     macro_rules! register_profiling_thread {
