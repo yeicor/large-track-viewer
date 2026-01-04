@@ -14,10 +14,20 @@
 use once_cell::sync::Lazy;
 use std::sync::Mutex;
 
+#[cfg(target_os = "android")]
+use winit::platform::android::activity::AndroidApp;
+
 /// Shared queue of picked files. Each entry is (name, bytes).
 type QueueEntry = (String, Vec<u8>);
 type Queue = Vec<QueueEntry>;
 static QUEUE: Lazy<Mutex<Queue>> = Lazy::new(|| Mutex::new(Vec::new()));
+
+#[cfg(target_os = "android")]
+pub static ANDROID_APP: Lazy<Mutex<Option<AndroidApp>>> = Lazy::new(|| Mutex::new(None));
+
+#[cfg(target_os = "android")]
+pub static PERMISSION_REQUESTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 #[cfg(not(target_os = "android"))]
 mod rfd {
@@ -80,9 +90,23 @@ pub(crate) mod rust {
     use once_cell::sync::Lazy;
     use std::sync::Mutex;
 
+    #[cfg(target_os = "android")]
+    use crate::file_picker::{ANDROID_APP, PERMISSION_REQUESTED};
+
     static DIALOG: Lazy<Mutex<Option<FileDialog>>> = Lazy::new(|| Mutex::new(None));
 
     pub fn open_file_picker(accept: Option<&str>, multiple: bool) -> Result<(), String> {
+        #[cfg(target_os = "android")]
+        {
+            if !PERMISSION_REQUESTED.load(std::sync::atomic::Ordering::Relaxed) {
+                if let Some(app) = ANDROID_APP.lock().unwrap().as_ref() {
+                    crate::file_picker::rust::request_storage_permission(app.clone())
+                        .expect("failed to request storage permission");
+                    PERMISSION_REQUESTED.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+        }
+
         #[cfg(target_os = "android")]
         let default_dir = std::path::PathBuf::from("/sdcard");
         #[cfg(not(target_os = "android"))]
@@ -121,37 +145,76 @@ pub(crate) mod rust {
     pub(crate) fn request_storage_permission(
         app: winit::platform::android::activity::AndroidApp,
     ) -> Result<(), String> {
-        use jni::objects::JObject;
-        use jni::sys::jobject;
+        use jni::{
+            JavaVM,
+            objects::{JObject, JValue},
+            sys,
+        };
 
-        let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr().cast()) }
-            .map_err(|e| format!("Failed to create JavaVM: {:?}", e))?;
+        tracing::info!("Starting all-files access request");
+
+        // Get the JavaVM
+        let vm_ptr = app.vm_as_ptr() as *mut *const sys::JNIInvokeInterface_;
+        let vm = unsafe { JavaVM::from_raw(vm_ptr) }
+            .map_err(|e| format!("Failed to get JavaVM: {:?}", e))?;
+        tracing::debug!("Obtained JavaVM");
+
+        // Attach to current thread
         let mut env = vm
             .attach_current_thread()
-            .map_err(|e| format!("Failed to attach current thread: {:?}", e))?;
+            .map_err(|e| format!("Failed to attach thread: {:?}", e))?;
+        tracing::debug!("Attached to current thread");
 
-        let record_string = env
-            .new_string("android.permission.READ_EXTERNAL_STORAGE")
-            .map_err(|e| format!("Failed to create string: {:?}", e))?;
+        // Get the activity
+        let activity = unsafe { JObject::from_raw(app.activity_as_ptr() as sys::jobject) };
+        tracing::debug!("Obtained activity object");
 
-        let string_class = env
-            .find_class("java/lang/String")
-            .map_err(|e| format!("Failed to find String class: {:?}", e))?;
-        let perms = env
-            .new_object_array(1, string_class, record_string)
-            .map_err(|e| format!("Failed to create object array: {:?}", e))?;
+        // Check if already granted
+        let environment_class = env
+            .find_class("android/os/Environment")
+            .map_err(|e| format!("Failed to find Environment class: {:?}", e))?;
+        let is_granted = env
+            .call_static_method(&environment_class, "isExternalStorageManager", "()Z", &[])
+            .map_err(|e| format!("Failed to call isExternalStorageManager: {:?}", e))?;
+        if is_granted
+            .z()
+            .map_err(|e| format!("Failed to get boolean: {:?}", e))?
+        {
+            tracing::info!("All-files access already granted");
+            return Ok(());
+        }
 
-        let brr = (&perms).into();
+        // Find the Intent class
+        let intent_class = env
+            .find_class("android/content/Intent")
+            .map_err(|e| format!("Failed to find Intent class: {:?}", e))?;
+        tracing::debug!("Found Intent class");
 
-        let activity = unsafe { JObject::from_raw(app.activity_as_ptr() as jobject) };
+        // Create the action string
+        let action_string = env
+            .new_string("android.settings.MANAGE_ALL_FILES_ACCESS_PERMISSION")
+            .map_err(|e| format!("Failed to create action string: {:?}", e))?;
 
+        // Create Intent
+        let intent = env
+            .new_object(
+                &intent_class,
+                "(Ljava/lang/String;)V",
+                &[JValue::Object(&action_string)],
+            )
+            .map_err(|e| format!("Failed to create Intent: {:?}", e))?;
+        tracing::debug!("Created Intent");
+
+        // Call startActivity
         env.call_method(
-            activity,
-            "requestPermissions",
-            "([Ljava/lang/String;I)V",
-            &[brr, jni::objects::JValueGen::Int(1)],
+            &activity,
+            "startActivity",
+            "(Landroid/content/Intent;)V",
+            &[JValue::Object(&intent)],
         )
-        .map_err(|e| format!("Failed to call requestPermissions: {:?}", e))?;
+        .map_err(|e| format!("Failed to call startActivity: {:?}", e))?;
+        tracing::info!("Called startActivity successfully");
+
         Ok(())
     }
 

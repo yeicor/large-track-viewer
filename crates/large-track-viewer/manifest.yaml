@@ -6,4 +6,4 @@ android:
     uses_permission:
       - name: "android.permission.INTERNET" # Download map tiles
       #- name: "android.permission.ACCESS_NETWORK_STATE"
-      - name: "android.permission.READ_EXTERNAL_STORAGE" # Read user's track files
+      - name: "android.permission.MANAGE_EXTERNAL_STORAGE" # Read user's track files (would be better to use a more specific permission, but this is the only one that works for all Android versions and does not require glue Java code that is hard to build)

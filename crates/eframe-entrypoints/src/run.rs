@@ -11,21 +11,17 @@
 pub fn native_main<F>(
     app_name: &str,
     app_creator: F,
-    #[cfg(target_os = "android")] android_app: Option<
-        winit::platform::android::activity::AndroidApp,
-    >,
+    #[cfg(target_os = "android")] android_app: winit::platform::android::activity::AndroidApp,
 ) where
     F: FnOnce(&eframe::CreationContext<'_>) -> Box<dyn eframe::App>,
 {
     #[cfg(feature = "profiling")]
     ::profiling::scope!("app::native_main");
-
-    // Initialize tracing/profiling except on Android (where android_logger is used)
-    #[cfg(not(target_os = "android"))]
-    crate::profiling::setup_logging_and_profiling();
-
     #[cfg(feature = "profiling")]
     ::profiling::register_thread!("Main");
+
+    // Initialize tracing/profiling except on Android (where android_logger is used)
+    crate::profiling::setup_logging_and_profiling();
 
     crate::log_version_info();
 
@@ -35,7 +31,7 @@ pub fn native_main<F>(
             .with_title(app_name)
             .with_drag_and_drop(true),
         #[cfg(target_os = "android")]
-        android_app,
+        android_app: Some(android_app),
         ..Default::default()
     };
 
@@ -64,19 +60,16 @@ where
 /// Android entry point.
 /// This is called from the macro-generated `android_main` function.
 #[cfg(target_os = "android")]
-#[doc(hidden)]
 pub fn android_main(
     app_name: &str,
     app: winit::platform::android::activity::AndroidApp,
     app_creator: impl FnOnce(&eframe::CreationContext<'_>) -> Box<dyn eframe::App> + Send + 'static,
 ) {
-    android_logger::init_once(
+    /*android_logger::init_once(
         android_logger::Config::default()
             .with_max_level(log::LevelFilter::Debug)
             .with_tag("LargeTrackViewer"),
-    );
-    crate::file_picker::rust::request_storage_permission(app.clone())
-        .expect("failed to request storage permission");
+    );*/
     unsafe {
         std::env::set_var("RUST_BACKTRACE", "full");
     }
@@ -88,5 +81,9 @@ pub fn android_main(
         .unwrap();
     let _guard = rt.enter();
 
-    native_main(app_name, app_creator, Some(app));
+    #[cfg(target_os = "android")]
+    {
+        *crate::file_picker::ANDROID_APP.lock().unwrap() = Some(app.clone());
+    }
+    native_main(app_name, move |cc| app_creator(cc), app);
 }

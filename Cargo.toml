@@ -20,7 +20,7 @@ winit = "*" # Use the same version as eframe
 rfd = "0.16" # Selecting files on native platforms
 
 # === Async Runtime ===
-tokio = { version = "1.48", default-features = false, features = ["macros", "sync", "io-util"] }
+tokio = { version = "1.48", default-features = false, features = ["macros", "sync", "io-util", "fs"] }
 
 # === CLI ===
 clap = { version = "4.5", features = ["derive", "env"] }
