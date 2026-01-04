@@ -32,7 +32,7 @@ thiserror = "2.0"
 
 # === GPX and Geo ===
 gpx = "0.10"
-geo = "0.31"
+geo = "0.32"
 
 # === Web ===
 wasm-bindgen = "0.2"
