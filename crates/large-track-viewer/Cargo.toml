@@ -39,7 +39,7 @@ profiling.workspace = true
 
 # === Geo ===
 geo.workspace = true
-walkers = "0.51"
+walkers = "0.52"
 gpx.workspace = true
 
 # === Misc ===
