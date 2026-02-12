@@ -155,11 +155,8 @@ fn render_tracks_tab(ui: &mut Ui, state: &mut AppState) {
     ui.vertical(|ui| {
         ui.horizontal_wrapped(|ui| {
             ui.scope(|ui| {
-                #[cfg(target_os = "android")]
-                ui.disable();
                 let response = ui.button("📂 Load (native)");
                 if response.clicked() {
-                    #[cfg(not(target_os = "android"))]
                     let _ = eframe_entrypoints::file_picker::open_native_file_picker(
                         Some(".gpx"),
                         true,

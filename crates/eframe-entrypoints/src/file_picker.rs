@@ -29,7 +29,6 @@ pub static ANDROID_APP: Lazy<Mutex<Option<AndroidApp>>> = Lazy::new(|| Mutex::ne
 pub static PERMISSION_REQUESTED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
-#[cfg(not(target_os = "android"))]
 mod rfd {
     use super::QUEUE;
 
@@ -262,7 +261,6 @@ pub(crate) mod rust {
     }
 }
 
-#[cfg(not(target_os = "android"))]
 pub use rfd::open_file_picker as open_native_file_picker;
 pub use rust::open_file_picker as open_rust_file_picker;
 pub use rust::render_file_dialog as render_rust_file_dialog;
