@@ -22,7 +22,7 @@ profiling = ["profiling/profile-with-tracing", "dep:tracing-chrome", "dep:open"]
 eframe.workspace = true
 egui.workspace = true
 winit.workspace = true
-egui-file-dialog = "0.12"
+egui-file-dialog = "0.13"
 
 # === Async Runtime ===
 tokio.workspace = true
