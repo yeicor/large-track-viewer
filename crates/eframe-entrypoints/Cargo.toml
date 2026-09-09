@@ -61,7 +61,7 @@ getrandom = { version = "*", features = ["js"]} # Fix for geo -> rand -> genrand
 # === Android ===
 [target.'cfg(target_os = "android")'.dependencies]
 log = "0.4"
-jni = "0.21"
+jni = "0.22"
 
 # === Build ===
 [build-dependencies]
